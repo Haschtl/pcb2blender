@@ -17,7 +17,7 @@ STACKED = "stacked_"
 PADS = "pads"
 
 INCLUDED_LAYERS = (
-    "F_Cu", "B_Cu", "F_Paste", "B_Paste", "F_SilkS", "B_SilkS", "F_Mask", "B_Mask"
+    "F_Cu", "B_Cu", "F_Paste", "B_Paste", "F_SilkS", "B_SilkS", "F_Mask", "B_Mask", "Edge_Cuts"
 )
 
 SVG_MARGIN = 1.0 # mm
