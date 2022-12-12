@@ -289,6 +289,7 @@ def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, e
     """
     Processes one side of the PCB and returns all texture maps
     """
+    # blur_normal_mask = False
     # Convert layers to bitmaps
     layers = {}
     for file in files:
@@ -328,6 +329,18 @@ def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, e
         material = select_material(layer, materials[mat])
         print(f"Processing {layer}")
 
+        if "Mask" in layer and dpi>2000:
+            # blur heatmap
+            scale = 255/np.max(heightmap)
+            heightmap = heightmap*scale
+            print(heightmap.shape)
+            _heightmap = layer2img(heightmap)
+            image = Image.fromarray(_heightmap)
+            filtered = image.filter(ImageFilter.GaussianBlur(radius=2))
+            heightmap = img2layer(filtered)
+            print(heightmap.shape)
+            heightmap = heightmap/scale
+
         buffer2 = np.array(layers[layer], dtype=np.float64)
         if material["invert"]:
             # If layer-SVG is inverted
@@ -352,17 +365,6 @@ def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, e
                     heightmap[row_idx, col_idx] += material["height"]
         if progress_cb is not None:
             progress_cb()
-        if "Mask" in layer:
-            # blur heatmap
-            scale = 255/np.max(heightmap)
-            heightmap = heightmap*scale
-            print(heightmap.shape)
-            _heightmap = layer2img(heightmap)
-            image = Image.fromarray(_heightmap)
-            filtered = image.filter(ImageFilter.GaussianBlur(radius=4))
-            heightmap = img2layer(filtered)
-            print(heightmap.shape)
-            heightmap = heightmap/scale
 
     # Convert heightmap to normal map
     scale = 100/np.max(heightmap)
@@ -412,7 +414,7 @@ def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, e
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("pcb3d", help="Path to .pcb3d file")
-    parser.add_argument("--dpi", default=1024,
+    parser.add_argument("--dpi", default=1024, type=int,
                         help="DPI resolution of exported maps")
     parser.add_argument("--material", default="Green",
                         help="Material: Green, Red, Blue, White or Black")
