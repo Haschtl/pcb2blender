@@ -4,3 +4,8 @@ site-packages/
 images/template*
 *.blend[1-9]
 release/
+orig/
+
+pcb2blender_importer/layers
+pcb2blender_importer/layers_cc
+pcb2blender_importer/textures

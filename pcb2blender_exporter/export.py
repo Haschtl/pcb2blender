@@ -1,5 +1,5 @@
 import pcbnew
-from pcbnew import PLOT_CONTROLLER as PlotController, PCB_PLOT_PARAMS, PLOT_FORMAT_SVG, ToMM
+from pcbnew import PLOT_CONTROLLER as PlotController, PCB_PLOT_PARAMS, PLOT_FORMAT_SVG, ToMM, PLOT_FORMAT_GERBER
 
 import tempfile, shutil, struct, re
 from pathlib import Path
@@ -81,22 +81,24 @@ def export_pcb3d(filepath, boarddefs):
             value = footprint.GetValue()
             reference = footprint.GetReference()
             for i, pad in enumerate(footprint.Pads()):
-                name = f"{value}_{reference}_{i}"
-                data = struct.pack(
-                    "!ff???BBffffBff",
-                    *map(ToMM, pad.GetPosition()),
-                    pad.IsFlipped(),
-                    has_model,
-                    is_tht_or_smd,
-                    pad.GetAttribute(),
-                    pad.GetShape(),
-                    *map(ToMM, pad.GetSize()),
-                    pad.GetOrientationRadians(),
-                    pad.GetRoundRectRadiusRatio(),
-                    pad.GetDrillShape(),
-                    *map(ToMM, pad.GetDrillSize()),
-                )
-                file.writestr(str(Path(PADS) / name), data)
+                layers = list(pad.GetLayerSet())
+                if any(["Paste" in l for l in layers]):
+                    name = f"{value}_{reference}_{i}"
+                    data = struct.pack(
+                        "!ff???BBffffBff",
+                        *map(ToMM, pad.GetPosition()),
+                        pad.IsFlipped(),
+                        has_model,
+                        is_tht_or_smd,
+                        pad.GetAttribute(),
+                        pad.GetShape(),
+                        *map(ToMM, pad.GetSize()),
+                        pad.GetOrientationRadians(),
+                        pad.GetRoundRectRadiusRatio(),
+                        pad.GetDrillShape(),
+                        *map(ToMM, pad.GetDrillSize()),
+                    )
+                    file.writestr(str(Path(PADS) / name), data)
 
 def get_boarddefs(board):
     boarddefs = {}
@@ -191,6 +193,7 @@ def export_layers(board, bounds, output_directory: Path):
         viewBox = " ".join(str(round(v * 1e6)) for v in bounds)
         content = svg_header_regex.sub(svg_header_sub.format(width, height, viewBox), content)
         filepath.write_text(content)
+    generate_gerbers(board, output_directory)
 
 def sanitized(name):
     return re.sub("[\W]+", "_", name)
@@ -211,3 +214,55 @@ svg_header_regex = re.compile(
     r"<svg([^>]*)width=\"[^\"]*\"[^>]*height=\"[^\"]*\"[^>]*viewBox=\"[^\"]*\"[^>]*>"
 )
 svg_header_sub = "<svg\g<1>width=\"{}\" height=\"{}\" viewBox=\"{}\">"
+
+
+def generate_gerbers(pcb, path):
+    plot_controller = pcbnew.PLOT_CONTROLLER(pcb)
+    plot_options = plot_controller.GetPlotOptions()
+
+    # Set General Options:
+    plot_options.SetOutputDirectory(path)
+    plot_options.SetPlotFrameRef(False)
+    plot_options.SetPlotValue(True)
+    plot_options.SetPlotReference(True)
+    plot_options.SetPlotInvisibleText(True)
+    plot_options.SetPlotViaOnMaskLayer(True)
+    plot_options.SetExcludeEdgeLayer(False)
+    #plot_options.SetPlotPadsOnSilkLayer(PLOT_PADS_ON_SILK_LAYER)
+    #plot_options.SetUseAuxOrigin(PLOT_USE_AUX_ORIGIN)
+    plot_options.SetMirror(False)
+    #plot_options.SetNegative(PLOT_NEGATIVE)
+    #plot_options.SetDrillMarksType(PLOT_DRILL_MARKS_TYPE)
+    #plot_options.SetScale(PLOT_SCALE)
+    plot_options.SetAutoScale(True)
+    #plot_options.SetPlotMode(PLOT_MODE)
+    #plot_options.SetLineWidth(pcbnew.FromMM(PLOT_LINE_WIDTH))
+
+    # Set Gerber Options
+    #plot_options.SetUseGerberAttributes(GERBER_USE_GERBER_ATTRIBUTES)
+    #plot_options.SetUseGerberProtelExtensions(GERBER_USE_GERBER_PROTEL_EXTENSIONS)
+    #plot_options.SetCreateGerberJobFile(GERBER_CREATE_GERBER_JOB_FILE)
+    #plot_options.SetSubtractMaskFromSilk(GERBER_SUBTRACT_MASK_FROM_SILK)
+    #plot_options.SetIncludeGerberNetlistInfo(GERBER_INCLUDE_GERBER_NETLIST_INFO)
+
+    plot_plan = [
+        ('F.Cu', pcbnew.F_Cu, 'Front Copper'),
+        ('B.Cu', pcbnew.B_Cu, 'Back Copper'),
+        ('F.Paste', pcbnew.F_Paste, 'Front Paste'),
+        ('B.Paste', pcbnew.B_Paste, 'Back Paste'),
+        ('F.SilkS', pcbnew.F_SilkS, 'Front SilkScreen'),
+        ('B.SilkS', pcbnew.B_SilkS, 'Back SilkScreen'),
+        ('F.Mask', pcbnew.F_Mask, 'Front Mask'),
+        ('B.Mask', pcbnew.B_Mask, 'Back Mask'),
+        ('Edge.Cuts', pcbnew.Edge_Cuts, 'Edges'),
+        ('Eco1.User', pcbnew.Eco1_User, 'Eco1 User'),
+        ('Eco2.User', pcbnew.Eco2_User, 'Eco1 User'),
+    ]
+
+    for layer_info in plot_plan:
+        plot_controller.SetLayer(layer_info[1])
+        plot_controller.OpenPlotfile(
+            layer_info[0], pcbnew.PLOT_FORMAT_GERBER, layer_info[2])
+        plot_controller.PlotLayer()
+
+    plot_controller.ClosePlot()

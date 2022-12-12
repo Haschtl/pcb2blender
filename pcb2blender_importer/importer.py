@@ -11,7 +11,6 @@ from enum import Enum
 import numpy as np
 
 from skia import SVGDOM, Stream, Surface, Color4f
-SKIA_MAGIC = 0.282222222
 from PIL import Image, ImageOps
 
 from .materials import setup_pcb_material, merge_materials, enhance_materials
@@ -19,20 +18,10 @@ from .materials import setup_pcb_material, merge_materials, enhance_materials
 from io_scene_x3d import ImportX3D, X3D_PT_import_transform, import_x3d
 from io_scene_x3d import menu_func_import as menu_func_import_x3d_original
 
-PCB = "pcb.wrl"
-COMPONENTS = "components"
-LAYERS = "layers"
-LAYERS_BOUNDS = "bounds"
-BOARDS = "boards"
-BOUNDS = "bounds"
-STACKED = "stacked_"
-PADS = "pads"
+from .texture_importer import PCB2BLENDER_OT_import_pcb3d_texture, menu_func_import_pcb3d_texture
+from .shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, BOUNDS, STACKED, PADS, INCLUDED_LAYERS, REQUIRED_MEMBERS, SKIA_MAGIC, INCH_TO_MM, regex_filter_components
 
-INCLUDED_LAYERS = (
-    "F_Cu", "B_Cu", "F_Paste", "B_Paste", "F_SilkS", "B_SilkS", "F_Mask", "B_Mask"
-)
 
-REQUIRED_MEMBERS = {PCB, LAYERS}
 
 PCB_THICKNESS = 1.6 # mm
 
@@ -841,21 +830,11 @@ PCB2_LAYER_NAMES = (
 
 MM_TO_M = 1e-3
 M_TO_MM = 1e3
-INCH_TO_MM = 1 / 25.4
 
 FIX_X3D_SCALE = 2.54 * MM_TO_M
 MATRIX_FIX_SCALE_INV = Matrix.Scale(FIX_X3D_SCALE, 4).inverted()
 
-regex_filter_components = re.compile(
-    r"(?P<prefix>Transform\s*{\s*"
-    r"(?:rotation (?P<r>[^\n]*)\n)?\s*"
-    r"(?:translation (?P<t>[^\n]*)\n)?\s*"
-    r"(?:scale (?P<s>[^\n]*)\n)?\s*"
-    r"children\s*\[\s*)"
-    r"(?P<instances>(?:Transform\s*{\s*"
-    r"(?:rotation [^\n]*\n)?\s*(?:translation [^\n]*\n)?\s*(?:scale [^\n]*\n)?\s*"
-    r"children\s*\[\s*Inline\s*{\s*url\s*\"[^\"]*\"\s*}\s*]\s*}\s*)+)"
-)
+
 
 regex_component = re.compile(
     r"Transform\s*{\s*"
@@ -986,6 +965,7 @@ def menu_func_import_x3d(self, context):
 
 classes = (
     PCB2BLENDER_OT_import_pcb3d,
+    PCB2BLENDER_OT_import_pcb3d_texture,
     PCB2BLENDER_OT_import_x3d,
     PCB2BLENDER_PT_import_transform_x3d,
 )
@@ -998,9 +978,11 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_x3d)
 
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_pcb3d)
+    bpy.types.TOPBAR_MT_file_import.append(menu_func_import_pcb3d_texture)
 
 def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d_texture)
 
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_x3d)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_x3d_original)

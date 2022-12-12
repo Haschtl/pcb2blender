@@ -16,8 +16,11 @@ from pathlib import Path
 dependencies = {
     "skia-python": "skia",
     "pillow": "PIL",
+    "numpy": "numpy",
+    "gerber-renderer":"gerber_renderer"
 }
-module_names = ("importer", "materials", "solder_joints")
+module_names = ("importer", "materials", "solder_joints",
+                "layers2texture", "texture_importer", "shared")
 
 dependency_path = (Path(__file__).parent / "site-packages").resolve()
 dependency_path.mkdir(exist_ok=True)

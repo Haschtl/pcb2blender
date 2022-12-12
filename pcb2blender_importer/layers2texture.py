@@ -1,150 +1,145 @@
+# export layer-infos from kicad
+# create mesh from svg
+# import layer-infos in blender
+# replace svg-export durch -> gerber -> svg
+# from typing import List, Dict, TypedDict, Tuple
 
-import matplotlib.image as mpimg
-from skia import SVGDOM, Stream, Surface, Color4f
-import io
-from typing import List, Dict, TypedDict, Tuple
 from PIL import Image
-import sys
 import numpy as np
-from glob import glob
+from pathlib import Path
 import os
+import argparse
+from glob import glob
 
-SKIA_MAGIC = 0.282222222
-
-# PCB2_LAYER_NAMES = (
-#     "Board",
-#     "F_Cu",
-#     "F_Paste",
-#     "F_Mask",
-#     "B_Cu",
-#     "B_Paste",
-#     "B_Mask",
-#     "Vias",
-#     "F_Silk",
-#     "B_Silk",
-
-# ffdf7f
-# e9ecf2
-
-# Colors from here https://blog.pcb-arts.com/en/blog/blender-tutorial-2
+try:
+    from .shared import openPCB3D, svg2img
+except ImportError:
+    from shared import openPCB3D, svg2img
 
 
-class Color(TypedDict):
-    invert: bool
-    base_color: Tuple[int, int, int, int]
-    metalness: int
-    roughness: int
-    emissive: int
-    occlusion: int
+# class Color(TypedDict):
+#     invert: bool
+#     base_color: Tuple[int, int, int, int]
+#     metalness: int
+#     roughness: int
+#     emissive: int
+#     specular: int
+#     occlusion: int
 
 
-class PCBType(TypedDict):
-    height: float
-    material: str
+# class PCBType(TypedDict):
+#     height: float
+#     material: str
 
 
-class Material(TypedDict):
-    invert: bool
-    base_color: Tuple[int, int, int, int]
-    metalness: int
-    roughness: int
-    emissive: int
-    occlusion: int
-    height: float
+# class Material(Color):
+#     height: float
 
 
-Colors: Dict[str, Color] = {
-    "SilkS_Black":
-        {"invert": True, "base_color": (
-            50, 50, 50, 255), "metalness": 40, "roughness":  40, "emissive": 10, "occlusion": 255, },
-    "SilkS_White":
-        {"invert": True, "base_color": (
-            255, 255, 255, 255), "metalness": 40, "roughness":  229, "emissive": 10, "occlusion": 255, },
-    "Paste_Pb":
-        {"invert": True, "base_color": (
-            200, 200, 200, 255), "metalness": 40, "roughness": 220, "emissive": 0, "occlusion": 255, },
+# Exported additional maps
+MAPS = ["metalness", "roughness", "emissive", "occlusion", "specular"]
 
-    "Mask_Blue":
-        {"invert": False, "base_color": (
-            72, 108, 188, 240), "metalness": 40, "roughness": 153, "emissive": 0, "occlusion": 255, },
-    "Mask_Green":
-        {"invert": False, "base_color": (
-            56, 103, 74, 240), "metalness": 40, "roughness": 153, "emissive": 0, "occlusion": 255, },
-    "Mask_Black":
-        {"invert": False, "base_color": (
-            72, 108, 188, 240), "metalness": 40, "roughness": 153, "emissive": 0, "occlusion": 255, },
-    "Mask_Red":
-        {"invert": False, "base_color": (
-            92, 24, 20, 240), "metalness": 40, "roughness": 153, "emissive": 0, "occlusion": 255, },
-    "Mask_White":
-        {"invert": False, "base_color": (
-            205, 205, 205, 240), "metalness": 40, "roughness": 30, "emissive": 0, "occlusion": 255},
-
-    "Cu_Gold2":
-        {"invert": True, "base_color": (
-            220, 180, 30, 255), "metalness": 40, "roughness": 150, "emissive": 0, "occlusion": 255, },
-    "Cu_Gold":
-        {"invert": True, "base_color": (
-            255, 223, 127, 255), "metalness": 255, "roughness": 102, "emissive": 0, "occlusion": 255},
-    "Cu_Silver":
-        {"invert": True, "base_color": (
-            233, 236, 242, 255), "metalness": 255, "roughness": 102, "emissive": 0, "occlusion": 255},
-    "Board_Al":
-        {"invert": True, "base_color": (
-            200, 202, 212, 255), "metalness": 255, "roughness": 102, "emissive": 0, "occlusion": 255},
-}
-
-materials: Dict[str, Dict[str, PCBType]] = {
-    "WhitePCB": {"SilkS": {"material": "Black", "height": 0.015},
-                 "Paste": {"material": "Pb", "height": 0.01},
-                 "Mask": {"material": "White", "height": 0.035},
-                 "Cu": {"material": "Gold", "height": 0.035},
-                 "Board": {"material": "Al", "height": 1.51}
-                 },
-    "GreenPCB": {"SilkS": {"material": "White", "height": 0.01},
-                 "Paste": {"material": "Pb", "height": 0.01},
-                 "Mask": {"material": "Green", "height": 0.01},
-                 "Cu": {"material": "Gold", "height": 0.035},
-                 "Board": {"material": "RK4", "height": 1.51}
-                 },
-    "RedPCB": {"SilkS": {"material": "White", "height": 0.01},
-                 "Paste": {"material": "Pb", "height": 0.01},
-                 "Mask": {"material": "Red", "height": 0.01},
-                 "Cu": {"material": "Gold", "height": 0.035},
-                 "Board": {"material": "RK4", "height": 1.51}
-               },
-    "BluePCB": {"SilkS": {"material": "White", "height": 0.01},
-               "Paste": {"material": "Pb", "height": 0.01},
-               "Mask": {"material": "Blue", "height": 0.01},
-               "Cu": {"material": "Gold", "height": 0.035},
-               "Board": {"material": "RK4", "height": 1.51}
-               },
-    "BlackPCB": {"SilkS": {"material": "White", "height": 0.01},
-                 "Paste": {"material": "Pb", "height": 0.01},
-                 "Mask": {"material": "Black", "height": 0.01},
-                 "Cu": {"material": "Gold", "height": 0.035},
-                 "Board": {"material": "RK4", "height": 1.51}
-                 },
-}
+# Order of PCB layers
 LAYER_ORDER = ["SilkS", "Paste", "Mask", "Cu", "Board"]
 LAYER_ORDER.reverse()
 
-INCH_TO_MM = 1 / 25.4
+# Texture definition of single PCB-layers
+# Colors: Dict[str, Color]
+Colors = {
+    "SilkS_Black":
+        {"invert": True, "base_color": (
+            50, 50, 50, 255), "metalness": 40, "roughness":  40, "emissive": 10, "occlusion": 255, "specular": 80},
+    "SilkS_White":
+        {"invert": True, "base_color": (
+            255, 255, 255, 255), "metalness": 40, "roughness":  229, "emissive": 10, "occlusion": 255, "specular": 80},
+
+    "Paste_Pb":
+        {"invert": True, "base_color": (
+            200, 200, 200, 255), "metalness": 40, "roughness": 220, "emissive": 0, "occlusion": 255, "specular": 80},
+
+    "Mask_Blue":
+        {"invert": False, "base_color": (
+            72, 108, 188, 240), "metalness": 40, "roughness": 153, "emissive": 0, "occlusion": 255, "specular": 190},
+    "Mask_Green":
+        {"invert": False, "base_color": (
+            56, 103, 74, 240), "metalness": 40, "roughness": 153, "emissive": 0, "occlusion": 255, "specular": 190},
+    "Mask_Black":
+        {"invert": False, "base_color": (
+            72, 108, 188, 240), "metalness": 40, "roughness": 153, "emissive": 0, "occlusion": 255, "specular": 190},
+    "Mask_Red":
+        {"invert": False, "base_color": (
+            92, 24, 20, 240), "metalness": 40, "roughness": 153, "emissive": 0, "occlusion": 255, "specular": 190},
+    "Mask_White":
+        {"invert": False, "base_color": (
+            205, 205, 205, 240), "metalness": 40, "roughness": 30, "emissive": 0, "occlusion": 255, "specular": 190},
+
+    "Cu_Gold2":
+        {"invert": True, "base_color": (
+            220, 180, 30, 255), "metalness": 40, "roughness": 150, "emissive": 0, "occlusion": 255, "specular": 120},
+    "Cu_Gold":
+        {"invert": True, "base_color": (
+            255, 223, 127, 255), "metalness": 255, "roughness": 102, "emissive": 0, "occlusion": 255, "specular": 120},
+    "Cu_Silver":
+        {"invert": True, "base_color": (
+            233, 236, 242, 255), "metalness": 255, "roughness": 102, "emissive": 0, "occlusion": 255, "specular": 120},
+
+    "Board_Al":
+        {"invert": True, "base_color": (
+            200, 202, 212, 255), "metalness": 255, "roughness": 102, "emissive": 0, "occlusion": 255, "specular": 0},
+}
+
+# materials: Definition of common PCB color combinations
+# materials: Dict[str, Dict[str, PCBType]]
+materials = {
+    "White": {"SilkS": {"material": "Black", "height": 0.015},
+              "Paste": {"material": "Pb", "height": 0.01},
+              "Mask": {"material": "White", "height": 0.035},
+              "Cu": {"material": "Gold", "height": 0.035},
+              "Board": {"material": "Al", "height": 1.51}
+              },
+    "Green": {"SilkS": {"material": "White", "height": 0.01},
+              "Paste": {"material": "Pb", "height": 0.01},
+              "Mask": {"material": "Green", "height": 0.01},
+              "Cu": {"material": "Gold", "height": 0.035},
+              "Board": {"material": "RK4", "height": 1.51}
+              },
+    "Red": {"SilkS": {"material": "White", "height": 0.01},
+            "Paste": {"material": "Pb", "height": 0.01},
+            "Mask": {"material": "Red", "height": 0.01},
+            "Cu": {"material": "Gold", "height": 0.035},
+            "Board": {"material": "RK4", "height": 1.51}
+            },
+    "Blue": {"SilkS": {"material": "White", "height": 0.01},
+             "Paste": {"material": "Pb", "height": 0.01},
+             "Mask": {"material": "Blue", "height": 0.01},
+             "Cu": {"material": "Gold", "height": 0.035},
+             "Board": {"material": "RK4", "height": 1.51}
+             },
+    "Black": {"SilkS": {"material": "White", "height": 0.01},
+              "Paste": {"material": "Pb", "height": 0.01},
+              "Mask": {"material": "Black", "height": 0.01},
+              "Cu": {"material": "Gold", "height": 0.035},
+              "Board": {"material": "RK4", "height": 1.51}
+              },
+}
 
 
-def select_material(layer: str, layer_types: Dict[str, PCBType]) -> Material:
+# def select_material(layer: str, layer_types: Dict[str, PCBType]) -> Material:
+def select_material(layer, layer_types):
+    """
+    Select a material based on the layer and layertypes
+    """
     if layer in layer_types:
         layer_id = layer+"_"+layer_types[layer]["material"]
     else:
         layer_id = "Board_Al"
-    material:Material = Colors[layer_id]
+    material = Colors[layer_id]
     material["height"] = layer_types[layer]["height"]
     return material
 
-# a function that takes a vector - three numbers - and normalize it, i.e make it's length = 1
-
 
 def normalizeRGB(vec):
+    """a function that takes a vector - three numbers - and normalize it, i.e make it's length = 1"""
     length = np.sqrt(vec[:, :, 0]**2 + vec[:, :, 1]**2 + vec[:, :, 2]**2)
     vec[:, :, 0] = vec[:, :, 0] / length
     vec[:, :, 1] = vec[:, :, 1] / length
@@ -153,7 +148,9 @@ def normalizeRGB(vec):
 
 
 def heightMapToNormalMap(image):
-
+    """
+    Create normal map from heightmap
+    """
     # initialize the normal map, and the two tangents:
     normalMap = np.zeros((image.shape[0], image.shape[1], 3))
     tan = np.zeros((image.shape[0], image.shape[1], 3))
@@ -209,76 +206,116 @@ def heightMapToNormalMap(image):
     return np.dstack((normalMap, np.ones((image.shape[0], image.shape[1]))*255))
 
 
-def svg2img(svg_path, dpi):
-    svg = SVGDOM.MakeFromStream(Stream.MakeFromFile(str(svg_path)))
-    width, height = svg.containerSize()
-    dpmm = dpi * INCH_TO_MM * SKIA_MAGIC
-    pixels_width, pixels_height = round(width * dpmm), round(height * dpmm)
-    surface = Surface(pixels_width, pixels_height)
+def concat_images(images, horizontal: bool):
+    heights = [im.height for im in images]
+    widths = [im.width for im in images]
+    if horizontal:
+        dst = Image.new('RGBA', (np.sum(widths), images[0].height))
+    else:
+        dst = Image.new('RGBA', (images[0].width, np.sum(heights)))
+    pos = 0
+    for image in images:
+        if horizontal:
+            dst.paste(image, (pos, 0))
+            pos += image.width
+        else:
+            dst.paste(image, (0, pos))
+            pos += image.height
+    return dst
 
-    with surface as canvas:
-        canvas.clear(Color4f.kWhite)
-        canvas.scale(pixels_width / width, pixels_height / height)
-        svg.render(canvas)
-
-    with io.BytesIO(surface.makeImageSnapshot().encodeToData()) as file:
-        image = Image.open(file)
-        image.load()
-
-    return image
+# def layers2texture(filepath: str, dpi: float, material: str, save: bool) -> Dict[str, Dict[str, Image.Image]]:
 
 
-def layers2texture(layers_folder: str, dpi: float, material: str, ) -> None:
-    layer_paths = list(glob(os.path.join(layers_folder, '*.svg')))
-    groups: Dict[str, List[str]] = {}
+def layers2texture(filepath: str, dpi: float, material: str, save: bool, progress_cb=None, use_gerber = True):
+    """
+    Processes layers from pcb3d file, returns Images for each side  
+    """
+    tempdir, pcb3d_layers = openPCB3D(Path(filepath))
+    # layers = [pcb3d.boards]
+    # layer_paths = list(glob(os.path.join(layers_folder, '*.svg')))
+    layer_paths = list(pcb3d_layers)
+    print(layer_paths)
+    # groups: Dict[str, List[str]] = {}
+    groups = {}
     for path in sorted(layer_paths, reverse=True):
         group_name = os.path.split(path)[1].split("_")[0]
         if group_name in groups:
-            groups[group_name].append(path)
+            groups[group_name].append(os.path.join(tempdir,path))
         else:
-            groups[group_name] = [path]
+            groups[group_name] = [os.path.join(tempdir, path)]
+
+    # images: Dict[str, Dict[str, Image.Image]] = {}
+    images = {}
+    export_dir = filepath.replace(".pcb3d", "")
     for name in groups:
-        _layers2texture(name, groups[name], dpi, material)
+        images[name] = _layers2texture(
+            name, groups[name], dpi, material, save, export_dir=export_dir, progress_cb=progress_cb, use_gerber=use_gerber)
+
+    # combine maps
+    maps = {}
+    for group in images:
+        for map in images[group]:
+            if map in maps:
+                maps[map].append(images[group][map])
+            else:
+                maps[map] = [images[group][map]]
+    for map in maps:
+        p = os.path.join(export_dir, f"{map}.png")
+        if not os.path.exists(os.path.dirname(p)):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+        concat_image = concat_images(maps[map], True)
+        concat_image.save(p)
+        print(f"Saving {p}")
+    return images
 
 
-def _layers2texture(name: str, files: List[str], dpi: float, mat:str, show: bool = True) -> None:
+# def _layers2texture(name: str, files: List[str], dpi: float, mat: str, save: bool = True, export_dir: str = ".", show: bool = False) -> Dict[str, Image.Image]:
+def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, export_dir: str = ".", progress_cb=None, show: bool = False, use_gerber: bool = True):
+    """
+    Processes one side of the PCB and returns all texture maps
+    """
+    # Convert layers to bitmaps
     layers = {}
     for file in files:
+        gerber_path=file.replace(".svg",".gerb")
+        if os.path.exists(gerber_path) and use_gerber:
+            gerber2svg(gerber_path) 
         layer = file.split("_")[-1].replace(".svg", "")
-        img = svg2img(file, dpi).getchannel(0)
-
+        img = svg2img(file, dpi)
         # if layer != "Mask":
         #     img = ImageOps.invert(img)
+        print(f'Processing {file}')
+        img.getchannel(0).save(file.replace(".svg", ".png"))
+        layers[layer] = img
 
-        img.save(file.replace(".svg", ".png"))
-        layers[layer] = svg2img(file, dpi)
-    print(layers.keys())
-
+    # Initialize maps
     img_shape = list(np.array(layers[list(layers.keys())[0]]).shape)
-    # img_shape_1d = img_shape.copy()
-    # img_shape_1d[2] = 1
-
     base_color = np.ones(img_shape)*50  # Default color
-    metalness = np.zeros(img_shape)
-    roughness = np.ones(img_shape)*50
-    roughness[:, :, 3] = 0
-    emissive = np.zeros(img_shape)  # Reflectivity
-    occlusion = np.ones(img_shape)*255
-    occlusion[:, :, 3] = 0
     heightmap = np.zeros(img_shape[:2])  # for normalmap
+    _metalness = np.zeros(img_shape)
+    _roughness = np.ones(img_shape)*50
+    _roughness[:, :, 3] = 0
+    _emissive = np.zeros(img_shape)  # Reflectivity
+    _occlusion = np.ones(img_shape)*255
+    _occlusion[:, :, 3] = 0
+    _specular = np.zeros(img_shape)
+    maps = {"metalness": _metalness, "roughness": _roughness,
+            "emissive": _emissive, "occlusion": _occlusion, "specular": _specular}
 
+    # Sort the layers
     ordered_layers = {}
     for layer in LAYER_ORDER:
         if layer in layers:
             ordered_layers[layer] = layers[layer]
 
+    # Process each layer
     for layer in ordered_layers:
         material = select_material(layer, materials[mat])
         print(f"Processing {layer}")
 
         buffer2 = np.array(layers[layer], dtype=np.float64)
-        # buffer2 = buffer2.astype(np.float64)
         if material["invert"]:
+            # If layer-SVG is inverted
             buffer2[:, :, 0] = buffer2[:, :, 0]*-1+255
             buffer2[:, :, 1] = buffer2[:, :, 1]*-1+255
             buffer2[:, :, 2] = buffer2[:, :, 2]*-1+255
@@ -289,83 +326,68 @@ def _layers2texture(name: str, files: List[str], dpi: float, mat:str, show: bool
         for row_idx, row in enumerate(buffer2):
             for col_idx, e in enumerate(row):
                 if buffer2[row_idx, col_idx, 0] != 0 and buffer2[row_idx, col_idx, 1] != 0 and buffer2[row_idx, col_idx, 2] != 0:
-                    if material["base_color"][3] != 255:
+                    ratio1 = (255-material["base_color"][3])/255
+                    ratio2 = material["base_color"][3]/255
+                    base_color[row_idx, col_idx] = base_color[row_idx,
+                                                              col_idx] * ratio1+buffer2[row_idx, col_idx]*ratio2
 
-                        ratio1 = (255-material["base_color"][3])/255
-                        ratio2 = material["base_color"][3]/255
-                        base_color[row_idx, col_idx] = base_color[row_idx,
-                                                                  col_idx] * ratio1+buffer2[row_idx, col_idx]*ratio2
-
-                    else:
-                        base_color[row_idx,
-                                   col_idx] = buffer2[row_idx, col_idx]
-
-                    metalness[row_idx, col_idx] = [
-                        material["metalness"], material["metalness"], material["metalness"], 255]
-                    roughness[row_idx][col_idx] = [
-                        material["roughness"], material["roughness"], material["roughness"], 255]
-                    emissive[row_idx, col_idx] = [
-                        material["emissive"], material["emissive"], material["emissive"], 255]
-                    occlusion[row_idx, col_idx] = [
-                        material["occlusion"], material["occlusion"], material["occlusion"], 255]
+                    for key in MAPS:
+                        maps[key][row_idx, col_idx] = [
+                            material[key], material[key], material[key], 255]
                     heightmap[row_idx, col_idx] += material["height"]
-                # else:
-                #     base_color[row_idx, col_idx] = [0, 0, 0, 0]
+        if progress_cb is not None:
+            progress_cb()
 
-            # buffer1[buffer2[:, :, :2] != [0, 0, 0]
-            #         ] += buffer2[buffer2[:, :, :2] != [0, 0, 0]]
-        # else:
-        #     base_color = buffer2
-
-    heightmap = heightmap/np.max(heightmap)*50
+    # Convert heightmap to normal map
+    heightmap = heightmap/np.max(heightmap)*100
     heightmap = heightmap.astype(np.uint8)
-
-    base_color = base_color.astype(np.uint8)
-    metalness = metalness.astype(np.uint8)
-    roughness = roughness.astype(np.uint8)
-    emissive = emissive.astype(np.uint8)
-    occlusion = occlusion.astype(np.uint8)
-
     height_4d = np.dstack(
         (heightmap, heightmap, heightmap, np.ones((img_shape[0], img_shape[1]))*255))
     height_4d = height_4d.astype(np.uint8)
     normal = heightMapToNormalMap(heightmap)
+
+    # Convert numpy arrays to uint8
     normal = normal.astype(np.uint8)
+    base_color = base_color.astype(np.uint8)
+    for key in MAPS:
+        maps[key] = maps[key].astype(np.uint8)
 
-    height_map_image = Image.fromarray(height_4d)
-    base_color_image = Image.fromarray(base_color)
-    metal_image = Image.fromarray(metalness)
-    roughness_image = Image.fromarray(roughness)
-    emissive_image = Image.fromarray(emissive)
-    occlusion_image = Image.fromarray(occlusion)
-    normal_image = Image.fromarray(normal)
+    # Convert numpy arrays to PIL.Image
+    # images: Dict[str, Image.Image] = {}
+    images = {}
+    for key in MAPS:
+        images[key] = Image.fromarray(maps[key])
+    images["displacement"] = Image.fromarray(height_4d)
+    images["normal"] = Image.fromarray(normal)
+    images["base_color"] = Image.fromarray(base_color)
 
-    height_map_image.save(os.path.join(
-        os.path.split(files[0])[0], name+"_displacement.png"))
+    if save:
+        # Save images
+        for key in images:
+            p = os.path.join(export_dir,
+                             os.path.split(files[0])[0], name+f"_{key}.png")
+            if not os.path.exists(os.path.dirname(p)):
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+            images[key].save(p)
+            print(f"Saving {p}")
 
-    base_color_image.save(os.path.join(
-        os.path.split(files[0])[0], name+"_base_color.png"))
-
-    metal_image.save(os.path.join(
-        os.path.split(files[0])[0], name+"_metal.png"))
-
-    roughness_image.save(os.path.join(
-        os.path.split(files[0])[0], name+"_roughness.png"))
-    emissive_image.save(os.path.join(
-        os.path.split(files[0])[0], name+"_emissive.png"))
-    occlusion_image.save(os.path.join(
-        os.path.split(files[0])[0], name+"_occlusion.png"))
-    normal_image.save(os.path.join(
-        os.path.split(files[0])[0], name+"_normal.png"))
     if show:
-        height_map_image.show()
-        base_color_image.show()
-        metal_image.show()
-        roughness_image.show()
-        emissive_image.show()
-        occlusion_image.show()
-        normal_image.show()
+        # Show images
+        for key in MAPS:
+            images[key].show()
+
+    return images
 
 
 if __name__ == "__main__":
-    layers2texture(sys.argv[1], 1024, "BluePCB")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("pcb3d", help="Path to .pcb3d file")
+    parser.add_argument("--dpi", default=1024,
+                        help="DPI resolution of exported maps")
+    parser.add_argument("--material", default="Green",
+                        help="Material: Green, Red, Blue, White or Black")
+    args = parser.parse_args()
+    layers2texture(args.pcb3d, args.dpi, args.material, True)
+
+    # out_dir = os.path.join(args.pcb3d.replace(".pcb3d", ""), "layers")
+    # create_blender_material(out_dir)
