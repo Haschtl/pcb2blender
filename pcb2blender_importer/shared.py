@@ -43,7 +43,7 @@ def openPCB3D(filepath: Path) -> Tuple[Path, List[str]]:
             # if missing := REQUIRED_MEMBERS.difference(MEMBERS):
             #     print(f"not a valid .pcb3d file: missing {str(missing)[1:-1]}")
             layers = [f"{LAYERS}/{layer}.svg" for layer in INCLUDED_LAYERS]
-            # layers = [f"{LAYERS}/{layer}.gerb" for layer in INCLUDED_LAYERS]
+            # layers = [f"{LAYERS}/{layer}.gbr" for layer in INCLUDED_LAYERS]
             f.extractall(tempdir, layers)
             return tempdir, layers
     except BadZipFile:
@@ -77,7 +77,7 @@ def svg2img(svg_path, dpi):
 def gerber2svg(gerber_path):
     from gerber_renderer import Gerber
     board=Gerber.Board(gerber_path)
-    board.render(gerber_path.replace(".gerb",".svg"))
+    board.render(gerber_path.replace(".gbr", ".svg"))
 
 
 regex_filter_components = re.compile(
