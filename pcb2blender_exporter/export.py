@@ -1,15 +1,21 @@
 import pcbnew
 from pcbnew import PLOT_CONTROLLER as PlotController, PCB_PLOT_PARAMS, PLOT_FORMAT_SVG, ToMM, PLOT_FORMAT_GERBER
 
-import tempfile, shutil, struct, re
+import os
+import tempfile
+import shutil
+import struct
+import re
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 from dataclasses import dataclass, field
 from typing import List
+import json
 
 PCB = "pcb.wrl"
 COMPONENTS = "components"
 LAYERS = "layers"
+BOARD_INFO = "board.yaml"
 LAYERS_BOUNDS = "bounds"
 BOARDS = "boards"
 BOUNDS = "bounds"
@@ -20,12 +26,14 @@ INCLUDED_LAYERS = (
     "F_Cu", "B_Cu", "F_Paste", "B_Paste", "F_SilkS", "B_SilkS", "F_Mask", "B_Mask", "Edge_Cuts"
 )
 
-SVG_MARGIN = 1.0 # mm
+SVG_MARGIN = 1.0  # mm
+
 
 @dataclass
 class StackedBoard:
     name: str
     offset: List[float]
+
 
 @dataclass
 class BoardDef:
@@ -33,22 +41,28 @@ class BoardDef:
     bounds: List[float]
     stacked_boards: List[StackedBoard] = field(default_factory=list)
 
+
 def export_pcb3d(filepath, boarddefs):
     init_tempdir()
-    
+
     wrl_path = get_temppath(PCB)
     components_path = get_temppath(COMPONENTS)
     pcbnew.ExportVRML(wrl_path, 0.001, True, True, components_path, 0.0, 0.0)
 
     layers_path = get_temppath(LAYERS)
     board = pcbnew.GetBoard()
-    bounds = tuple(map(ToMM, board.ComputeBoundingBox(aBoardEdgesOnly=True).getWxRect()))
+    bounds = tuple(map(ToMM, board.ComputeBoundingBox(
+        aBoardEdgesOnly=True).getWxRect()))
     bounds = (
         bounds[0] - SVG_MARGIN, bounds[1] - SVG_MARGIN,
         bounds[2] + SVG_MARGIN * 2, bounds[3] + SVG_MARGIN * 2
     )
     export_layers(board, bounds, layers_path)
 
+    board_info_path = get_temppath(BOARD_INFO)
+    export_board_info(board, board_info_path)
+
+    board_id = os.path.split(board.GetFileName())[1].replace(".kicad_pcb", "")
     with ZipFile(filepath, mode="w", compression=ZIP_DEFLATED) as file:
         # always ensure the COMPONENTS, LAYERS and BOARDS directories are created
         file.writestr(COMPONENTS + "/", "")
@@ -61,12 +75,17 @@ def export_pcb3d(filepath, boarddefs):
 
         for path in layers_path.glob("**/*.svg"):
             file.write(path, str(Path(LAYERS) / path.name))
-        file.writestr(str(Path(LAYERS) / LAYERS_BOUNDS), struct.pack("!ffff", *bounds))
-
+        for path in layers_path.glob("**/*.gbr"):
+            file.write(path, str(Path(LAYERS) /
+                       path.name.replace(board_id+"-", "")))
+        file.writestr(str(Path(LAYERS) / LAYERS_BOUNDS),
+                      struct.pack("!ffff", *bounds))
+        file.write(board_info_path, BOARD_INFO)
         for boarddef in boarddefs.values():
             subdir = Path(BOARDS) / boarddef.name
 
-            file.writestr(str(subdir / BOUNDS), struct.pack("!ffff", *boarddef.bounds))
+            file.writestr(str(subdir / BOUNDS),
+                          struct.pack("!ffff", *boarddef.bounds))
 
             for stacked in boarddef.stacked_boards:
                 file.writestr(
@@ -81,7 +100,8 @@ def export_pcb3d(filepath, boarddefs):
             value = footprint.GetValue()
             reference = footprint.GetReference()
             for i, pad in enumerate(footprint.Pads()):
-                layers = list(pad.GetLayerSet())
+                layers = [board.GetLayerName(id)
+                          for id in pad.GetLayerSet().Seq()]
                 if any(["Paste" in l for l in layers]):
                     name = f"{value}_{reference}_{i}"
                     data = struct.pack(
@@ -99,6 +119,7 @@ def export_pcb3d(filepath, boarddefs):
                         *map(ToMM, pad.GetDrillSize()),
                     )
                     file.writestr(str(Path(PADS) / name), data)
+
 
 def get_boarddefs(board):
     boarddefs = {}
@@ -134,7 +155,8 @@ def get_boarddefs(board):
 
             boarddef = BoardDef(
                 sanitized(name),
-                (tl_pos[0], tl_pos[1], br_pos[0] - tl_pos[0], br_pos[1] - tl_pos[1])
+                (tl_pos[0], tl_pos[1], br_pos[0] -
+                 tl_pos[0], br_pos[1] - tl_pos[1])
             )
             boarddefs[boarddef.name] = boarddef
 
@@ -147,7 +169,7 @@ def get_boarddefs(board):
 
         if onto != "ONTO":
             continue
-        
+
         other_name = sanitized(other)
         target_name = sanitized(target)
 
@@ -158,13 +180,15 @@ def get_boarddefs(board):
         target_pos = boarddefs[target_name].bounds[:2]
         stacked = StackedBoard(
             other_name,
-            (stack_pos[0] - target_pos[0], stack_pos[1] - target_pos[1], z_offset)
+            (stack_pos[0] - target_pos[0],
+             stack_pos[1] - target_pos[1], z_offset)
         )
         boarddefs[target_name].stacked_boards.append(stacked)
 
     ignored += list(tls.keys()) + list(brs.keys()) + list(stacks.keys())
 
     return boarddefs, ignored
+
 
 def export_layers(board, bounds, output_directory: Path):
     plot_controller = PlotController(board)
@@ -188,27 +212,76 @@ def export_layers(board, bounds, output_directory: Path):
         filepath = filepath.rename(filepath.parent / f"{layer}.svg")
 
         content = filepath.read_text()
-        width  = f"{bounds[2] * 0.1:.6f}cm"
+        width = f"{bounds[2] * 0.1:.6f}cm"
         height = f"{bounds[3] * 0.1:.6f}cm"
         viewBox = " ".join(str(round(v * 1e6)) for v in bounds)
-        content = svg_header_regex.sub(svg_header_sub.format(width, height, viewBox), content)
+        content = svg_header_regex.sub(
+            svg_header_sub.format(width, height, viewBox), content)
         filepath.write_text(content)
     generate_gerbers(board, output_directory)
+
+
+def export_board_info(board, output_path):
+    # Stackup API is not ready yet, workaround: open kicad_pcb file and parse content
+    # stackup = board.GetDesignSettings().GetStackupDescriptor()
+    kicad_pcb_path = board.GetFileName()
+    with open(kicad_pcb_path, "r") as f:
+        kicad_pcb = f.readlines()
+    layers = []
+    start = False
+    for line in kicad_pcb:
+        if "(stackup" in line:
+            start = True
+            continue
+        if line == '    )\n':
+            break
+
+        if start is True:
+            layers.append(line.strip())
+    board_info = {}
+
+    layers_parsed = []
+    for l in layers:
+        if l.startswith("(layer"):
+            parsed_layer = {}
+            l_c = l.split("(")
+            for c in l_c:
+                if c.startswith("layer"):
+                    parsed_layer["name"] = c.split('"')[1]
+                if c.startswith("type"):
+                    parsed_layer["type"] = c.split('"')[1]
+                if c.startswith("color"):
+                    parsed_layer["color"] = c.split('"')[1]
+                if "thickness" in c:
+                    parsed_layer["thickness"] = float(
+                        c.replace("thickness", "").replace(")", ""))
+            layers_parsed.append(parsed_layer)
+        if l.startswith("(copper_finish "):
+            board_info["copper_finish"] = l.split('"')[1]
+
+    board_info = {"stackup": layers_parsed}
+    with open(output_path, "w") as f:
+        json.dump(board_info, f, indent=3)
+
 
 def sanitized(name):
     return re.sub("[\W]+", "_", name)
 
+
 def get_tempdir():
     return Path(tempfile.gettempdir()) / "pcb2blender_tmp"
 
+
 def get_temppath(filename):
     return get_tempdir() / filename
+
 
 def init_tempdir():
     tempdir = get_tempdir()
     if tempdir.exists():
         shutil.rmtree(tempdir)
     tempdir.mkdir()
+
 
 svg_header_regex = re.compile(
     r"<svg([^>]*)width=\"[^\"]*\"[^>]*height=\"[^\"]*\"[^>]*viewBox=\"[^\"]*\"[^>]*>"
@@ -228,22 +301,22 @@ def generate_gerbers(pcb, path):
     plot_options.SetPlotInvisibleText(True)
     plot_options.SetPlotViaOnMaskLayer(True)
     plot_options.SetExcludeEdgeLayer(False)
-    #plot_options.SetPlotPadsOnSilkLayer(PLOT_PADS_ON_SILK_LAYER)
-    #plot_options.SetUseAuxOrigin(PLOT_USE_AUX_ORIGIN)
+    # plot_options.SetPlotPadsOnSilkLayer(PLOT_PADS_ON_SILK_LAYER)
+    # plot_options.SetUseAuxOrigin(PLOT_USE_AUX_ORIGIN)
     plot_options.SetMirror(False)
-    #plot_options.SetNegative(PLOT_NEGATIVE)
-    #plot_options.SetDrillMarksType(PLOT_DRILL_MARKS_TYPE)
-    #plot_options.SetScale(PLOT_SCALE)
+    # plot_options.SetNegative(PLOT_NEGATIVE)
+    # plot_options.SetDrillMarksType(PLOT_DRILL_MARKS_TYPE)
+    # plot_options.SetScale(PLOT_SCALE)
     plot_options.SetAutoScale(True)
-    #plot_options.SetPlotMode(PLOT_MODE)
-    #plot_options.SetLineWidth(pcbnew.FromMM(PLOT_LINE_WIDTH))
+    # plot_options.SetPlotMode(PLOT_MODE)
+    # plot_options.SetLineWidth(pcbnew.FromMM(PLOT_LINE_WIDTH))
 
     # Set Gerber Options
-    #plot_options.SetUseGerberAttributes(GERBER_USE_GERBER_ATTRIBUTES)
-    #plot_options.SetUseGerberProtelExtensions(GERBER_USE_GERBER_PROTEL_EXTENSIONS)
-    #plot_options.SetCreateGerberJobFile(GERBER_CREATE_GERBER_JOB_FILE)
-    #plot_options.SetSubtractMaskFromSilk(GERBER_SUBTRACT_MASK_FROM_SILK)
-    #plot_options.SetIncludeGerberNetlistInfo(GERBER_INCLUDE_GERBER_NETLIST_INFO)
+    # plot_options.SetUseGerberAttributes(GERBER_USE_GERBER_ATTRIBUTES)
+    # plot_options.SetUseGerberProtelExtensions(GERBER_USE_GERBER_PROTEL_EXTENSIONS)
+    # plot_options.SetCreateGerberJobFile(GERBER_CREATE_GERBER_JOB_FILE)
+    # plot_options.SetSubtractMaskFromSilk(GERBER_SUBTRACT_MASK_FROM_SILK)
+    # plot_options.SetIncludeGerberNetlistInfo(GERBER_INCLUDE_GERBER_NETLIST_INFO)
 
     plot_plan = [
         ('F.Cu', pcbnew.F_Cu, 'Front Copper'),
