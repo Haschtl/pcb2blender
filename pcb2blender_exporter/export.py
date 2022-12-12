@@ -100,26 +100,27 @@ def export_pcb3d(filepath, boarddefs):
             value = footprint.GetValue()
             reference = footprint.GetReference()
             for i, pad in enumerate(footprint.Pads()):
-                layers = [board.GetLayerName(id)
-                          for id in pad.GetLayerSet().Seq()]
-                if any(["Paste" in l for l in layers]):
-                    name = f"{value}_{reference}_{i}"
-                    data = struct.pack(
-                        "!ff???BBffffBff",
-                        *map(ToMM, pad.GetPosition()),
-                        pad.IsFlipped(),
-                        has_model,
-                        is_tht_or_smd,
-                        pad.GetAttribute(),
-                        pad.GetShape(),
-                        *map(ToMM, pad.GetSize()),
-                        pad.GetOrientationRadians(),
-                        pad.GetRoundRectRadiusRatio(),
-                        pad.GetDrillShape(),
-                        *map(ToMM, pad.GetDrillSize()),
-                    )
-                    file.writestr(str(Path(PADS) / name), data)
-
+                # layers = [board.GetLayerName(id)
+                #           for id in pad.GetLayerSet().Seq()]
+                name = f"{value}_{reference}_{i}"
+                is_flipped = pad.IsFlipped()
+                has_paste = pad.IsOnLayer(pcbnew.B_Paste if is_flipped else pcbnew.F_Paste)
+                data = struct.pack(
+                    "!ff????BBffffBff",
+                    *map(ToMM, pad.GetPosition()),
+                    is_flipped,
+                    has_model,
+                    is_tht_or_smd,
+                    has_paste,
+                    pad.GetAttribute(),
+                    pad.GetShape(),
+                    *map(ToMM, pad.GetSize()),
+                    pad.GetOrientationRadians(),
+                    pad.GetRoundRectRadiusRatio(),
+                    pad.GetDrillShape(),
+                    *map(ToMM, pad.GetDrillSize()),
+                )
+                file.writestr(str(Path(PADS) / name), data)
 
 def get_boarddefs(board):
     boarddefs = {}

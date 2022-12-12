@@ -74,6 +74,7 @@ class Pad:
     is_flipped: bool
     has_model: bool
     is_tht_or_smd: bool
+    has_paste: bool
     pad_type: PadType
     shape: PadShape
     size: Vector
@@ -101,7 +102,8 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         items=(
             ("NONE", "None", "Do not add any solder joints"),
             ("SMART", "Smart", "Only add solder joints to footprints that have THT/SMD "\
-                "attributes set and have 3D models"),
+                "attributes set and that have 3D models and only to pads which have a "\
+                "solder paste layer (for SMD pads)"),
             ("ALL", "All", "Add solder joints to all pads")))
     center_pcb:        BoolProperty(name="Center PCB", default=True)
 
@@ -112,7 +114,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
     stack_boards:      BoolProperty(name="Stack PCBs", default=True)
 
     pcb_material:      EnumProperty(name="PCB Material", default="RASTERIZED",
-        items=(("RASTERIZED", "Rasterized", ""), ("3D", "3D", "")))
+        items=(("RASTERIZED", "Rasterized (Cycles)", ""), ("3D", "3D (deprecated)", "")))
     texture_dpi:       FloatProperty(name="Texture DPI",
         default=1016.0, soft_min=508.0, soft_max=2032.0)
 
@@ -200,6 +202,9 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
         # materials
 
+        if self.pcb_material == "RASTERIZED":
+            context.scene.render.engine = "CYCLES"
+
         if self.merge_materials:
             merge_materials(self.component_cache.values())
 
@@ -249,7 +254,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
         # rasterize/import layer svgs
 
-        if self.pcb_material == "RASTERIZED" and self.enhance_materials:
+        if self.enhance_materials and self.pcb_material == "RASTERIZED":
             layers_path = tempdir / LAYERS
             dpi = self.texture_dpi
             images = {}
@@ -304,7 +309,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
         pcb_meshes = {obj.data for obj in pcb_objects if obj.type == "MESH"}
 
-        if self.pcb_material == "RASTERIZED" and self.enhance_materials:
+        if self.enhance_materials and self.pcb_material == "RASTERIZED":
             for obj in pcb_objects[1:]:
                 bpy.data.objects.remove(obj)
             pcb_object = pcb_objects[0]
@@ -412,6 +417,8 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                 if self.add_solder_joints == "SMART":
                     if not pad.has_model or not pad.is_tht_or_smd:
                         continue
+                    if pad.pad_type == PadType.SMD and not pad.has_paste:
+                        continue
 
                 if not pad.pad_type in {PadType.THT, PadType.SMD}:
                     continue
@@ -516,25 +523,30 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         layers_bounds = struct.unpack("!ffff", layers_bounds_path.read_bytes())
 
         boards = {}
-        for board_dir in (zip_path / BOARDS).iterdir():
-            bounds_path = board_dir / BOUNDS
-            if not bounds_path.exists():
-                continue
+        if not (boards_path := (zip_path / BOARDS)).exists():
+            self.warning(f"old file format: PCB3D file doesn't contain \"{BOARDS}\" dir")
+        else:
+            for board_dir in boards_path.iterdir():
+                bounds_path = board_dir / BOUNDS
+                if not bounds_path.exists():
+                    continue
 
-            try:
-                bounds = struct.unpack("!ffff", bounds_path.read_bytes())
-            except struct.error:
-                self.warning(f"ignoring board \"{board_dir}\" (corrupted)")
-                continue
+                try:
+                    bounds = struct.unpack("!ffff", bounds_path.read_bytes())
+                except struct.error:
+                    self.warning(f"ignoring board \"{board_dir}\" (corrupted)")
+                    continue
 
-            bounds = (
-                Vector((bounds[0], -bounds[1])),
-                Vector((bounds[0] + bounds[2], -(bounds[1] + bounds[3])))
-            )
+                bounds = (
+                    Vector((bounds[0], -bounds[1])),
+                    Vector((bounds[0] + bounds[2], -(bounds[1] + bounds[3])))
+                )
 
-            stacked_boards = []
-            for path in board_dir.iterdir():
-                if path.name.startswith(STACKED):
+                stacked_boards = []
+                for path in board_dir.iterdir():
+                    if not path.name.startswith(STACKED):
+                        continue
+
                     try:
                         offset = struct.unpack("!fff", path.read_bytes())
                     except struct.error:
@@ -546,21 +558,29 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                         Vector((offset[0], -offset[1], offset[2])),
                     ))
 
-            boards[board_dir.name] = Board(bounds, stacked_boards)
+                boards[board_dir.name] = Board(bounds, stacked_boards)
 
         pads = {}
-        for path in (zip_path / PADS).iterdir():
-            pad_struct = struct.unpack("!ff???BBffffBff", path.read_bytes())
-            pads[path.name] = Pad(
-                Vector((pad_struct[0], -pad_struct[1])),
-                *pad_struct[2:5],
-                PadType(pad_struct[5]),
-                PadShape(pad_struct[6]),
-                Vector(pad_struct[7:9]),
-                *pad_struct[9:11],
-                DrillShape(pad_struct[11]),
-                Vector(pad_struct[12:14]),
-            )
+        if not (pads_path := (zip_path / PADS)).exists():
+            self.warning(f"old file format: PCB3D file doesn't contain \"{PADS}\" dir")
+        else:
+            for path in pads_path.iterdir():
+                try:
+                    pad_struct = struct.unpack("!ff????BBffffBff", path.read_bytes())
+                except struct.error:
+                    self.warning(f"old file format: failed to parse pads")
+                    break
+
+                pads[path.name] = Pad(
+                    Vector((pad_struct[0], -pad_struct[1])),
+                    *pad_struct[2:6],
+                    PadType(pad_struct[6]),
+                    PadShape(pad_struct[7]),
+                    Vector(pad_struct[8:10]),
+                    *pad_struct[10:12],
+                    DrillShape(pad_struct[12]),
+                    Vector(pad_struct[13:15]),
+                )
 
         return PCB3D(pcb_file_content, components, layers_bounds, boards, pads)
 
