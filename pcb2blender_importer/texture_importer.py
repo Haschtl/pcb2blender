@@ -27,6 +27,7 @@ class PCB2BLENDER_OT_import_pcb3d_texture(bpy.types.Operator, ImportHelper):
 
     join_components: BoolProperty(name="Join components", default=True)
     use_existing: BoolProperty(name="Use existing textures", default=True)
+    create_pcb: BoolProperty(name="Create PCB mesh from Edge_Cut layer", default=True)
 
     def __init__(self):
         super().__init__()
@@ -41,7 +42,7 @@ class PCB2BLENDER_OT_import_pcb3d_texture(bpy.types.Operator, ImportHelper):
 
         tempdir, pcb3d_layers = openPCB3D(filepath)
         edges_path = os.path.join(tempdir, "Edge_Cuts.svg")
-        if os.path.isfile(edges_path):
+        if os.path.isfile(edges_path) and self.create_pcb:
             self.create_pcb_mesh(str(filepath))
         else:
             print("Cant create Mesh. File {edges_path} does not exist.")
@@ -138,7 +139,9 @@ class PCB2BLENDER_OT_import_pcb3d_texture(bpy.types.Operator, ImportHelper):
         col2.prop(self, "join_components")
         col2.split()
         col2.label(text="Use existing textures")
-        col2.prop(self, "use_existing", slider=True)
+        col2.prop(self, "use_existing")
+        col2.label(text="Create PCB Mesh from Edges_Cut layer")
+        col2.prop(self, "create_pcb")
 
     def create_blender_material(self, maps_dir: str):
         ob = bpy.context.active_object
