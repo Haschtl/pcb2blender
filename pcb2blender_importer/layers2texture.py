@@ -4,7 +4,7 @@
 # replace svg-export durch -> gerber -> svg
 # from typing import List, Dict, TypedDict, Tuple
 
-from PIL import Image
+from PIL import Image, ImageFilter
 import numpy as np
 from pathlib import Path
 import os
@@ -12,10 +12,24 @@ import argparse
 from glob import glob
 
 try:
-    from .shared import openPCB3D, svg2img
+    from .shared import openPCB3D, svg2img, gerber2svg
 except ImportError:
-    from shared import openPCB3D, svg2img
+    from shared import openPCB3D, svg2img, gerber2svg
 
+
+def layer2img(layer):
+    layer = layer.astype(np.uint8)
+    layer_4d = np.dstack(
+        (layer, layer, layer,  np.ones((layer.shape[0], layer.shape[1]))*255))
+    layer_4d = layer_4d.astype(np.uint8)
+    return layer_4d
+
+
+def img2layer(layer):
+    layer = np.array(layer)
+    layer.astype(np.float64)
+    print(layer.shape)
+    return layer[:, :, 0]
 
 # class Color(TypedDict):
 #     invert: bool
@@ -151,6 +165,7 @@ def heightMapToNormalMap(image):
     """
     Create normal map from heightmap
     """
+    print(image.shape)
     # initialize the normal map, and the two tangents:
     normalMap = np.zeros((image.shape[0], image.shape[1], 3))
     tan = np.zeros((image.shape[0], image.shape[1], 3))
@@ -226,7 +241,7 @@ def concat_images(images, horizontal: bool):
 # def layers2texture(filepath: str, dpi: float, material: str, save: bool) -> Dict[str, Dict[str, Image.Image]]:
 
 
-def layers2texture(filepath: str, dpi: float, material: str, save: bool, progress_cb=None, use_gerber = True):
+def layers2texture(filepath: str, dpi: float, material: str, save: bool, progress_cb=None, use_gerber=True):
     """
     Processes layers from pcb3d file, returns Images for each side  
     """
@@ -240,7 +255,7 @@ def layers2texture(filepath: str, dpi: float, material: str, save: bool, progres
     for path in sorted(layer_paths, reverse=True):
         group_name = os.path.split(path)[1].split("_")[0]
         if group_name in groups:
-            groups[group_name].append(os.path.join(tempdir,path))
+            groups[group_name].append(os.path.join(tempdir, path))
         else:
             groups[group_name] = [os.path.join(tempdir, path)]
 
@@ -277,9 +292,9 @@ def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, e
     # Convert layers to bitmaps
     layers = {}
     for file in files:
-        gerber_path=file.replace(".svg",".gerb")
+        gerber_path = file.replace(".svg", ".gerb")
         if os.path.exists(gerber_path) and use_gerber:
-            gerber2svg(gerber_path) 
+            gerber2svg(gerber_path)
         layer = file.split("_")[-1].replace(".svg", "")
         img = svg2img(file, dpi)
         # if layer != "Mask":
@@ -337,29 +352,44 @@ def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, e
                     heightmap[row_idx, col_idx] += material["height"]
         if progress_cb is not None:
             progress_cb()
+        if "Mask" in layer:
+            # blur heatmap
+            scale = 255/np.max(heightmap)
+            heightmap = heightmap*scale
+            print(heightmap.shape)
+            _heightmap = layer2img(heightmap)
+            image = Image.fromarray(_heightmap)
+            filtered = image.filter(ImageFilter.GaussianBlur(radius=4))
+            heightmap = img2layer(filtered)
+            print(heightmap.shape)
+            heightmap = heightmap/scale
 
     # Convert heightmap to normal map
-    heightmap = heightmap/np.max(heightmap)*100
-    heightmap = heightmap.astype(np.uint8)
-    height_4d = np.dstack(
-        (heightmap, heightmap, heightmap, np.ones((img_shape[0], img_shape[1]))*255))
-    height_4d = height_4d.astype(np.uint8)
-    normal = heightMapToNormalMap(heightmap)
+    scale = 100/np.max(heightmap)
+    heightmap = heightmap*scale
+    heightmap[heightmap < 0] = 0
+    heightmap[heightmap > 255] = 255
+    _heightmap = layer2img(heightmap)
 
     # Convert numpy arrays to uint8
-    normal = normal.astype(np.uint8)
     base_color = base_color.astype(np.uint8)
+
     for key in MAPS:
         maps[key] = maps[key].astype(np.uint8)
 
     # Convert numpy arrays to PIL.Image
     # images: Dict[str, Image.Image] = {}
     images = {}
+    images["base_color"] = Image.fromarray(base_color)
+    images["displacement"] = Image.fromarray(_heightmap)
     for key in MAPS:
         images[key] = Image.fromarray(maps[key])
-    images["displacement"] = Image.fromarray(height_4d)
-    images["normal"] = Image.fromarray(normal)
-    images["base_color"] = Image.fromarray(base_color)
+
+    use_normal = True
+    if use_normal:
+        normal = heightMapToNormalMap(_heightmap[:, :, 0])
+        normal = normal.astype(np.uint8)
+        images["normal"] = Image.fromarray(normal)
 
     if save:
         # Save images
