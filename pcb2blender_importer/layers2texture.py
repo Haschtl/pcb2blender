@@ -109,21 +109,26 @@ def heightMapToNormalMap(image):
 
 
 def concat_images(images, horizontal: bool):
-    heights = [im.height for im in images]
-    widths = [im.width for im in images]
-    if horizontal:
-        dst = Image.new('RGBA', (np.sum(widths), images[0].height))
-    else:
-        dst = Image.new('RGBA', (images[0].width, np.sum(heights)))
-    pos = 0
-    for image in images:
-        if horizontal:
-            dst.paste(image, (pos, 0))
-            pos += image.width
-        else:
-            dst.paste(image, (0, pos))
-            pos += image.height
-    return dst
+    # heights = [im.height for im in images]
+    # widths = [im.width for im in images]
+    # if horizontal:
+    #     dst = Image.new('RGBA', (np.sum(widths), images[0].height))
+    # else:
+    #     dst = Image.new('RGBA', (images[0].width, np.sum(heights)))
+    # pos = 0
+    # for image in images:
+    #     if horizontal:
+    #         dst.paste(image, (pos, 0))
+    #         pos += image.width
+    #     else:
+    #         dst.paste(image, (0, pos))
+    #         pos += image.height
+    # return dst
+
+    empty = Image.new("L", images[0].size)
+    images.append(empty)
+    merged = Image.merge("RGB", images)
+    return merged
 
 # def layers2texture(filepath: str, dpi: float, material: str, save: bool) -> Dict[str, Dict[str, Image.Image]]:
 

@@ -19,8 +19,7 @@ dependencies = {
     "numpy": "numpy",
     "gerber-renderer":"gerber_renderer"
 }
-module_names = ("importer", "materials", "solder_joints",
-                "layers2texture", "texture_importer", "shared")
+module_names = ("importer", "materials", "solder_joints")
 
 dependency_path = (Path(__file__).parent / "site-packages").resolve()
 dependency_path.mkdir(exist_ok=True)

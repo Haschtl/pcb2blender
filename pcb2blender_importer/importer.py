@@ -9,6 +9,8 @@ from zipfile import ZipFile, BadZipFile, Path as ZipPath
 from dataclasses import dataclass, field
 from enum import Enum
 import numpy as np
+import os
+from glob import glob
 
 from skia import SVGDOM, Stream, Surface, Color4f
 from PIL import Image, ImageOps
@@ -18,10 +20,10 @@ from .materials import setup_pcb_material, merge_materials, enhance_materials
 from io_scene_x3d import ImportX3D, X3D_PT_import_transform, import_x3d
 from io_scene_x3d import menu_func_import as menu_func_import_x3d_original
 
-from .texture_importer import PCB2BLENDER_OT_import_pcb3d_texture, menu_func_import_pcb3d_texture
+from .texture_importer import create_material
 from .web_exporter import PCB2BLENDER_OT_export_pcb_web, menu_func_export_pcb_web
 from .shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, BOUNDS, STACKED, PADS, INCLUDED_LAYERS, REQUIRED_MEMBERS, SKIA_MAGIC, INCH_TO_MM, regex_filter_components
-
+from .layers2texture import layers2texture
 
 
 PCB_THICKNESS = 1.6 # mm
@@ -114,8 +116,8 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
     cut_boards:        BoolProperty(name="Cut PCBs", default=True)
     stack_boards:      BoolProperty(name="Stack PCBs", default=True)
 
-    pcb_material:      EnumProperty(name="PCB Material", default="RASTERIZED",
-        items=(("RASTERIZED", "Rasterized (Cycles)", ""), ("3D", "3D (deprecated)", "")))
+    pcb_material:      EnumProperty(name="PCB Material", default="PERFORMANCE",
+                                    items=(("RASTERIZED", "Rasterized (Cycles)", ""), ("PERFORMANCE", "Rasterized (Web)", ""), ("3D", "3D (deprecated)", "")))
     texture_dpi:       FloatProperty(name="Texture DPI",
         default=1016.0, soft_min=508.0, soft_max=2032.0)
 
@@ -129,6 +131,12 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
     fpnl_bevel_depth:  FloatProperty(name="Bevel Depth (mm)",
         default=0.05, soft_min=0.0, soft_max=0.25)
     fpnl_setup_camera: BoolProperty(name="Setup Orthographic Camera", default=True)
+
+    
+    custom_material:   EnumProperty(name="PCB Material", default="Auto",
+                                    items=(("Green", "Green", ""), ("Red", "Red", ""), ("Blue", "Blue", ""), ("White", "White", ""), ("Black", "Black", ""),("Auto","Auto","")))
+    use_existing:      BoolProperty(name="Use existing textures", default=True)
+    create_pcb:        BoolProperty(name="Create PCB mesh from Edge_Cut layer", default=False)
 
     filter_glob:       StringProperty(default="*.pcb3d", options={"HIDDEN"})
 
@@ -279,6 +287,22 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
                 images[layer] = image
 
+        if self.enhance_materials and self.pcb_material == "PERFORMANCE":
+            texture_dir = str(filepath).replace(".pcb3d", "")
+            if not self.use_existing or not os.path.isfile(os.path.join(texture_dir, "base_color.png")):
+                self.create_texture_maps(str(filepath))
+            else:
+                print("Did not create new texture. Using existing ones")
+
+        # SVG2Mesh
+        if self.create_pcb:
+            edges_path = os.path.join(tempdir, "Edge_Cuts.svg")
+            if os.path.isfile(edges_path):
+                self.edgecuts_2_mesh(str(filepath))
+            else:
+                print("Cant create Mesh. File {edges_path} does not exist.")
+
+
         # import components
 
         if self.import_components:
@@ -319,6 +343,16 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
             board_material = pcb_object.data.materials[0]
             setup_pcb_material(board_material.node_tree, images)
+        elif self.enhance_materials and self.pcb_material == "PERFORMANCE":
+            for obj in pcb_objects[1:]:
+                bpy.data.objects.remove(obj)
+            pcb_object = pcb_objects[0]
+
+            pcb_object.data.transform(Matrix.Diagonal((1, 1, 1.015, 1)))
+
+            board_material = pcb_object.data.materials[0]
+            # setup_pcb_material(board_material.node_tree, images)
+            self.create_blender_material(pcb_object, texture_dir)
         else:
             if can_enhance:
                 self.enhance_pcb_layers(context, layers)
@@ -702,6 +736,72 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         vias.data.transform(Matrix.Diagonal((1, 1, 0.97, 1)))
         vias.data.polygons.foreach_set("use_smooth", [True] * len(vias.data.polygons))
 
+    def edgecuts_2_mesh(self, svg_path: str):
+        bpy.ops.import_curve.svg(filepath=svg_path)
+
+        bpy.ops.curve.primitive_bezier_circle_add()
+        path = bpy.context.object
+        print('Path: {path.type}')
+
+        dg = bpy.context.evaluated_depsgraph_get()
+        path = path.evaluated_get(dg)
+
+        mesh = path.to_mesh()
+        print(mesh)
+
+        o = bpy.data.objects.new("pcb", mesh.copy())
+        bpy.context.scene.collection.objects.link(o)
+
+    def create_texture_maps(self, pcb3d_path: str):
+        wm = bpy.context.window_manager
+        tot = 2*10
+        wm.progress_begin(0, tot)
+        wm.progress_end()
+        global counter
+        counter = 0
+
+        def update_progress():
+            global counter
+            counter += 1
+            wm.progress_update(counter)
+        if self.custom_material == "Auto":
+            mat = "Green"
+        else:
+            mat = self.custom_material
+        # update_progress = lambda: wm.progress_update(i)
+        layers2texture(pcb3d_path, self.texture_dpi,
+                       mat, True, update_progress)
+
+    def create_blender_material(self, pcb_object, maps_dir: str):
+        # pcb_object = bpy.context.active_object
+        pcb_object.data.materials.clear()
+        print("Creating blender materials")
+        layer_paths = list(
+            glob(os.path.join(maps_dir, '*.png'), recursive=False))
+        # groups: Dict[str, List[str]] = {}
+        groups = {}
+        for path in sorted(layer_paths, reverse=True):
+            n_split = os.path.split(path)[1].split("_")
+            if len(n_split) == 1 or n_split[0] == "base":
+                group_name = "merged"
+            else:
+                group_name = n_split[0]
+            if group_name in groups:
+                groups[group_name].append(path)
+            else:
+                groups[group_name] = [path]
+
+        for group in groups:
+            print(f"Creating material for {group}")
+            new_mat = create_material(group+"_material", groups[group])
+            # Assign it to object
+            # if pcb_object.data.materials:
+            #     # assign to 1st material slot
+            #     pcb_object.data.materials[0] = new_mat
+            # else:
+            #     # no slots
+            pcb_object.data.materials.append(new_mat)
+
     @staticmethod
     def copy_object(obj, collection):
         new_obj = obj.copy()
@@ -798,7 +898,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         col.enabled = self.enhance_materials
         col.label(text="PCB Material")
         col.prop(self, "pcb_material", text="")
-        if self.pcb_material == "RASTERIZED":
+        if self.pcb_material == "RASTERIZED" or self.pcb_material == "PERFORMANCE":
             col.prop(self, "texture_dpi", slider=True)
 
         if has_svg2blender():
@@ -826,6 +926,18 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                         self.fpnl_path = ""
             else:
                 self.fpnl_path = ""
+
+
+        if self.pcb_material == "PERFORMANCE":
+            col = layout.column()
+            col.label(text="PCB Material")
+            col.prop(self, "custom_material", text="")
+            layout.split()
+            col2 = layout.column()
+            col2.label(text="Use existing textures")
+            col2.prop(self, "use_existing")
+            col2.label(text="Create PCB Mesh from Edges_Cut layer")
+            col2.prop(self, "create_pcb")
 
     def error(self, msg):
         print(f"error: {msg}")
@@ -986,7 +1098,6 @@ def menu_func_import_x3d(self, context):
 
 classes = (
     PCB2BLENDER_OT_import_pcb3d,
-    PCB2BLENDER_OT_import_pcb3d_texture,
     PCB2BLENDER_OT_import_x3d,
     PCB2BLENDER_PT_import_transform_x3d,
     PCB2BLENDER_OT_export_pcb_web
@@ -1000,13 +1111,11 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_x3d)
 
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_pcb3d)
-    bpy.types.TOPBAR_MT_file_import.append(menu_func_import_pcb3d_texture)
 
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export_pcb_web)
 
 def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d)
-    bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d_texture)
 
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_pcb_web)
 
