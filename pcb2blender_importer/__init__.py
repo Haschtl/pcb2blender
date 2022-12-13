@@ -17,7 +17,8 @@ dependencies = {
     "skia-python": "skia",
     "pillow": "PIL",
     "numpy": "numpy",
-    "gerber-renderer":"gerber_renderer"
+    "gerber-renderer":"gerber_renderer",
+    "PyYAML":"yaml"
 }
 module_names = ("importer", "materials", "solder_joints")
 

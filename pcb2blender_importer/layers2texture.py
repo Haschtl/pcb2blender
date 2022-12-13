@@ -1,9 +1,10 @@
-# export layer-infos from kicad
+# uv-mapping
 # create mesh from svg
-# import layer-infos in blender
-# replace svg-export durch -> gerber -> svg
-# from typing import List, Dict, TypedDict, Tuple
 
+# replace svg-export durch -> gerber -> svg
+
+
+# from typing import List, Dict, TypedDict, Tuple
 from PIL import Image, ImageFilter
 import numpy as np
 from pathlib import Path
@@ -12,10 +13,10 @@ import argparse
 
 try:
     from .shared import openPCB3D, svg2img, gerber2svg
-    from .uv_materials import select_material
+    from .uv_materials import select_material, material_presets
 except ImportError:
     from shared import openPCB3D, svg2img, gerber2svg
-    from uv_materials import select_material
+    from uv_materials import select_material, material_presets
 
 def layer2img(layer):
     layer = layer.astype(np.uint8)
@@ -109,31 +110,27 @@ def heightMapToNormalMap(image):
 
 
 def concat_images(images, horizontal: bool):
-    # heights = [im.height for im in images]
-    # widths = [im.width for im in images]
-    # if horizontal:
-    #     dst = Image.new('RGBA', (np.sum(widths), images[0].height))
-    # else:
-    #     dst = Image.new('RGBA', (images[0].width, np.sum(heights)))
-    # pos = 0
-    # for image in images:
-    #     if horizontal:
-    #         dst.paste(image, (pos, 0))
-    #         pos += image.width
-    #     else:
-    #         dst.paste(image, (0, pos))
-    #         pos += image.height
-    # return dst
+    heights = [im.height for im in images]
+    widths = [im.width for im in images]
+    if horizontal:
+        dst = Image.new('RGBA', (np.sum(widths), images[0].height))
+    else:
+        dst = Image.new('RGBA', (images[0].width, np.sum(heights)))
+    pos = 0
+    for image in images:
+        if horizontal:
+            dst.paste(image, (pos, 0))
+            pos += image.width
+        else:
+            dst.paste(image, (0, pos))
+            pos += image.height
+    return dst
 
-    empty = Image.new("L", images[0].size)
-    images.append(empty)
-    merged = Image.merge("RGB", images)
-    return merged
 
 # def layers2texture(filepath: str, dpi: float, material: str, save: bool) -> Dict[str, Dict[str, Image.Image]]:
 
 
-def layers2texture(filepath: str, dpi: float, material: str, save: bool, progress_cb=None, use_gerber=True):
+def layers2texture(filepath: str, dpi: float, materials: dict, save: bool, progress_cb=None, use_gerber=True):
     """
     Processes layers from pcb3d file, returns Images for each side  
     """
@@ -156,7 +153,7 @@ def layers2texture(filepath: str, dpi: float, material: str, save: bool, progres
     export_dir = filepath.replace(".pcb3d", "")
     for name in groups:
         images[name] = _layers2texture(
-            name, groups[name], dpi, material, save, export_dir=export_dir, progress_cb=progress_cb, use_gerber=use_gerber)
+            name, groups[name], dpi, materials, save, export_dir=export_dir, progress_cb=progress_cb, use_gerber=use_gerber)
 
     # combine maps
     maps = {}
@@ -177,7 +174,7 @@ def layers2texture(filepath: str, dpi: float, material: str, save: bool, progres
 
 
 # def _layers2texture(name: str, files: List[str], dpi: float, mat: str, save: bool = True, export_dir: str = ".", show: bool = False) -> Dict[str, Image.Image]:
-def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, export_dir: str = ".", progress_cb=None, show: bool = False, use_gerber: bool = True):
+def _layers2texture(name: str, files, dpi: float, materials: dict, save: bool = True, export_dir: str = ".", progress_cb=None, show: bool = False, use_gerber: bool = True):
     """
     Processes one side of the PCB and returns all texture maps
     """
@@ -218,7 +215,7 @@ def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, e
 
     # Process each layer
     for layer in ordered_layers:
-        material = select_material(layer, mat)
+        material = select_material(name+"."+layer, materials)
         print(f"Processing {layer}")
 
         if "Mask" in layer and dpi > 2000:
@@ -312,7 +309,15 @@ if __name__ == "__main__":
     parser.add_argument("--material", default="Green",
                         help="Material: Green, Red, Blue, White or Black")
     args = parser.parse_args()
-    layers2texture(args.pcb3d, args.dpi, args.material, True)
+    
+    mat = args.material
+    if mat not in material_presets:
+        raise Exception(f"Material {mat} does not exist")
+    stackup={}
+    for l in material_presets[mat]:
+        stackup["F."+l] = material_presets[mat][l]
+        stackup["B."+l] = material_presets[mat][l]
+    layers2texture(args.pcb3d, args.dpi, stackup, True)
 
     # out_dir = os.path.join(args.pcb3d.replace(".pcb3d", ""), "layers")
     # create_blender_material(out_dir)
