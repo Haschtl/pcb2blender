@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import numpy as np
 import os
+import yaml
 from glob import glob
 
 from skia import SVGDOM, Stream, Surface, Color4f
@@ -24,9 +25,10 @@ from .texture_importer import create_material
 from .web_exporter import PCB2BLENDER_OT_export_pcb_web, menu_func_export_pcb_web
 from .shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, BOUNDS, STACKED, PADS, INCLUDED_LAYERS, REQUIRED_MEMBERS, SKIA_MAGIC, INCH_TO_MM, regex_filter_components
 from .layers2texture import layers2texture
+from .uv_materials import defaultLayerStack, material_presets
 
-
-PCB_THICKNESS = 1.6 # mm
+PCB_THICKNESS = 1.6  # mm
+BOARD_INFO = "board.yaml"
 
 @dataclass
 class Board:
@@ -93,6 +95,7 @@ class PCB3D:
     layers_bounds: tuple[float, float, float, float]
     boards: dict[str, Board]
     pads: dict[str, Pad]
+    stackup: dict[str,dict]
 
 class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
     """Import a PCB3D file"""
@@ -133,7 +136,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
     fpnl_setup_camera: BoolProperty(name="Setup Orthographic Camera", default=True)
 
     
-    custom_material:   EnumProperty(name="PCB Material", default="Auto",
+    custom_material:   EnumProperty(name="PCB Color", default="Auto",
                                     items=(("Green", "Green", ""), ("Red", "Red", ""), ("Blue", "Blue", ""), ("White", "White", ""), ("Black", "Black", ""),("Auto","Auto","")))
     use_existing:      BoolProperty(name="Use existing textures", default=True)
     create_pcb:        BoolProperty(name="Create PCB mesh from Edge_Cut layer", default=False)
@@ -259,7 +262,10 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         for obj in pcb_objects:
             obj.data.transform(Matrix.Diagonal((*obj.scale, 1)))
             obj.scale = (1, 1, 1)
-            self.setup_uvs(obj, pcb.layers_bounds)
+            if self.pcb_material != "PERFORMANCE":
+                self.setup_uvs(obj, pcb.layers_bounds)
+            else:
+                self.setup_uvs_performance(obj, pcb.layers_bounds)
 
         # rasterize/import layer svgs
 
@@ -274,7 +280,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                 if (layer := f_layer[2:]) != "Mask":
                     front = ImageOps.invert(front)
                     back  = ImageOps.invert(back)
-                    empty = Image.new("L", front.size)
+                empty = Image.new("L", front.size)
 
                 png_path = layers_path / f"{layer}.png"
                 merged = Image.merge("RGB", (front, back, empty))
@@ -290,7 +296,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         if self.enhance_materials and self.pcb_material == "PERFORMANCE":
             texture_dir = str(filepath).replace(".pcb3d", "")
             if not self.use_existing or not os.path.isfile(os.path.join(texture_dir, "base_color.png")):
-                self.create_texture_maps(str(filepath))
+                self.create_texture_maps(pcb, str(filepath))
             else:
                 print("Did not create new texture. Using existing ones")
 
@@ -315,8 +321,6 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                 bpy.data.objects.remove(obj)
 
         self.new_materials |= set(bpy.data.materials) - materials_before
-
-        shutil.rmtree(tempdir)
 
         # enhance pcb
 
@@ -534,6 +538,13 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                 obj.location.xy -= parent_board.bounds[0] * MM_TO_M
                 obj.parent = parent_board.obj
 
+        if (pcb_plain_path := (tempdir / "pcb_plain.wrl")).exists():
+            bpy.ops.pcb2blender.import_x3d(
+                filepath=str(pcb_plain_path), scale=1.0, join=False, enhance_materials=False, tris_to_quads=False)
+        else:
+            self.warning(f"No 'pcb_plain.wrl' found in PCB3D. Will not add simplified PCB-board")
+
+        shutil.rmtree(tempdir)
         return pcb
 
     def parse_pcb3d(self, file, extract_dir) -> PCB3D:
@@ -544,6 +555,13 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             with open(extract_dir / PCB, "wb") as filtered_file:
                 filtered = regex_filter_components.sub("\g<prefix>", pcb_file_content)
                 filtered_file.write(filtered.encode("UTF-8"))
+        if (boards_path := (zip_path / "pcb_plain.wrl")).exists():
+            with file.open("pcb_plain.wrl") as pcb_file2:
+                pcb_file_content2 = pcb_file2.read().decode("UTF-8")
+                with open(extract_dir / "pcb_plain.wrl", "wb") as filtered_file:
+                    filtered = regex_filter_components.sub(
+                        "\g<prefix>", pcb_file_content2)
+                    filtered_file.write(filtered.encode("UTF-8"))
 
         components = list({
             name for name in file.namelist()
@@ -617,7 +635,28 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                     Vector(pad_struct[13:15]),
                 )
 
-        return PCB3D(pcb_file_content, components, layers_bounds, boards, pads)
+        if not (info_path := (zip_path / BOARD_INFO)).exists() or self.custom_material != "Auto":
+            if not info_path.exists():
+                self.warning(
+                    f"old file format: PCB3D file doesn't contain \"{BOARD_INFO}\" dir")
+            stackup = {}
+            mat = self.custom_material
+            if mat == "Auto":
+                mat ="Green"
+            for l in material_presets[mat]:
+                stackup["F."+l] = material_presets[mat][l]
+                stackup["B."+l] = material_presets[mat][l]
+        else:
+            info = yaml.safe_load(info_path.read_text())
+            stackup={}
+            for s in info["stackup"]:
+                stackup[s["name"]] =defaultLayerStack(s["name"])
+                if "color" in s:
+                    stackup[s["name"]]["material"]=s["color"]
+                if "thickness" in s:
+                    stackup[s["name"]]["height"] =s["thickness"]
+
+        return PCB3D(pcb_file_content, components, layers_bounds, boards, pads, stackup)
 
     @staticmethod
     def get_boundingbox(context, bounds):
@@ -641,6 +680,35 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         bm.free()
 
         return obj
+
+    @staticmethod
+    def setup_uvs_performance(obj, layers_bounds):
+        mesh = obj.data
+        vertices = np.empty(len(mesh.vertices) * 3)
+        mesh.vertices.foreach_get("co", vertices)
+        vertices = vertices.reshape((len(mesh.vertices), 3))
+
+        indices = np.empty(len(mesh.loops), dtype=int)
+        mesh.loops.foreach_get("vertex_index", indices)
+        offset = np.array((layers_bounds[0], -layers_bounds[1],0))
+        size = np.array((layers_bounds[2]*2, layers_bounds[3],1))
+        # uvs = (vertices[:, :2][indices] * M_TO_MM -
+        #        offset) / size + np.array((0, 1))
+        uvs = (vertices[:][indices] * M_TO_MM -
+               offset) / size + np.array((0, 1,0))
+
+        if uvs.size>0:
+            # x_width=np.max(uvs[:,0])
+            x_width=0.5
+            uvs[uvs[:, 2] < 0] += np.array((x_width, 0,0))
+            uvs = uvs[:,:2]
+        # for idx in range(len(uvs)):
+        #     uvs[idx] += idx*layers_bounds[2]
+
+        uv_layer = mesh.uv_layers[0]
+        uv_layer.data.foreach_set("uv", uvs.flatten())
+
+
 
     @staticmethod
     def setup_uvs(obj, layers_bounds):
@@ -752,7 +820,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         o = bpy.data.objects.new("pcb", mesh.copy())
         bpy.context.scene.collection.objects.link(o)
 
-    def create_texture_maps(self, pcb3d_path: str):
+    def create_texture_maps(self, pcb, pcb3d_path: str):
         wm = bpy.context.window_manager
         tot = 2*10
         wm.progress_begin(0, tot)
@@ -764,13 +832,10 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             global counter
             counter += 1
             wm.progress_update(counter)
-        if self.custom_material == "Auto":
-            mat = "Green"
-        else:
-            mat = self.custom_material
+
         # update_progress = lambda: wm.progress_update(i)
         layers2texture(pcb3d_path, self.texture_dpi,
-                       mat, True, update_progress)
+                       pcb.stackup, True, update_progress)
 
     def create_blender_material(self, pcb_object, maps_dir: str):
         # pcb_object = bpy.context.active_object
