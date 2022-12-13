@@ -19,6 +19,7 @@ from io_scene_x3d import ImportX3D, X3D_PT_import_transform, import_x3d
 from io_scene_x3d import menu_func_import as menu_func_import_x3d_original
 
 from .texture_importer import PCB2BLENDER_OT_import_pcb3d_texture, menu_func_import_pcb3d_texture
+from .web_exporter import PCB2BLENDER_OT_export_pcb_web, menu_func_export_pcb_web
 from .shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, BOUNDS, STACKED, PADS, INCLUDED_LAYERS, REQUIRED_MEMBERS, SKIA_MAGIC, INCH_TO_MM, regex_filter_components
 
 
@@ -988,6 +989,7 @@ classes = (
     PCB2BLENDER_OT_import_pcb3d_texture,
     PCB2BLENDER_OT_import_x3d,
     PCB2BLENDER_PT_import_transform_x3d,
+    PCB2BLENDER_OT_export_pcb_web
 )
 
 def register():
@@ -1000,12 +1002,17 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_pcb3d)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_pcb3d_texture)
 
+    bpy.types.TOPBAR_MT_file_export.append(menu_func_export_pcb_web)
+
 def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d_texture)
 
+    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_pcb_web)
+
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_x3d)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_x3d_original)
+
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
