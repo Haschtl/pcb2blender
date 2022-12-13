@@ -25,12 +25,30 @@ INCLUDED_LAYERS = (
 )
 
 REQUIRED_MEMBERS = {PCB, LAYERS}
+PCB_THICKNESS = 1.6  # mm
 
 
 INCH_TO_MM = 1 / 25.4
 
+PCB2_LAYER_NAMES = (
+    "Board",
+    "F_Cu",
+    "F_Paste",
+    "F_Mask",
+    "B_Cu",
+    "B_Paste",
+    "B_Mask",
+    "Vias",
+    "F_Silk",
+    "B_Silk",
+)
 
-def openPCB3D(filepath: Path) -> Tuple[Path, List[str]]:
+MM_TO_M = 1e-3
+M_TO_MM = 1e3
+
+FIX_X3D_SCALE = 2.54 * MM_TO_M
+
+def read_pcb3d_layers(filepath: Path) -> Tuple[Path, List[str]]:
     """
     Copied from importer.py:PCB2BLENDER_OT_import_pcb3d.import_pcb3d()
     """
@@ -90,3 +108,11 @@ regex_filter_components = re.compile(
     r"(?:rotation [^\n]*\n)?\s*(?:translation [^\n]*\n)?\s*(?:scale [^\n]*\n)?\s*"
     r"children\s*\[\s*Inline\s*{\s*url\s*\"[^\"]*\"\s*}\s*]\s*}\s*)+)"
 )
+
+
+def register():
+    pass
+
+
+def unregister():
+    pass

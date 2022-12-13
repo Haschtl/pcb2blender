@@ -11,10 +11,10 @@ import os
 import argparse
 
 try:
-    from .shared import openPCB3D, svg2img, gerber2svg
+    from .shared import read_pcb3d_layers, svg2img, gerber2svg
     from .uv_materials import select_material
 except ImportError:
-    from shared import openPCB3D, svg2img, gerber2svg
+    from shared import read_pcb3d_layers, svg2img, gerber2svg
     from uv_materials import select_material
 
 def layer2img(layer):
@@ -132,7 +132,7 @@ def layers2texture(filepath: str, dpi: float, material: str, save: bool, progres
     """
     Processes layers from pcb3d file, returns Images for each side  
     """
-    tempdir, pcb3d_layers = openPCB3D(Path(filepath))
+    tempdir, pcb3d_layers = read_pcb3d_layers(Path(filepath))
     # layers = [pcb3d.boards]
     # layer_paths = list(glob(os.path.join(layers_folder, '*.svg')))
     layer_paths = list(pcb3d_layers)
@@ -299,6 +299,11 @@ def _layers2texture(name: str, files, dpi: float, mat: str, save: bool = True, e
     return images
 
 
+def register():
+    pass
+
+def unregister():
+    pass
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("pcb3d", help="Path to .pcb3d file")

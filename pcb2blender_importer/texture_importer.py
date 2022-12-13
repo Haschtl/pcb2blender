@@ -8,39 +8,45 @@ from pathlib import Path
 
 
 from .layers2texture import layers2texture
-from .shared import openPCB3D
+from .shared import read_pcb3d_layers
+from .importer_base import PCB2BLENDER_OT_import_pcb3d
 counter = 0
 
 
-class PCB2BLENDER_OT_import_pcb3d_texture(bpy.types.Operator, ImportHelper):
+class PCB2BLENDER_OT_import_pcb3d_texture(PCB2BLENDER_OT_import_pcb3d):
     """Import texture from PCB3D file"""
     bl_idname = "pcb2blender.import_pcb3d_texture"
     bl_label = "Import Texture from .pcb3d"
     bl_options = {"PRESET", "UNDO"}
 
-    pcb_material:      EnumProperty(name="PCB Material", default="Green",
+    custom_material:      EnumProperty(name="PCB Material", default="Green",
                                     items=(("Green", "Green", ""), ("Red", "Red", ""), ("Blue", "Blue", ""), ("White", "White", ""), ("Black", "Black", "")))
-    texture_dpi:       FloatProperty(name="Texture DPI",
-                                     default=1016.0, soft_min=508.0, soft_max=2032.0)
+    # texture_dpi:       FloatProperty(name="Texture DPI",
+    #                                  default=1016.0, soft_min=508.0, soft_max=2032.0)
     simplify_mesh: EnumProperty(name="Simplify mesh", items=(("Simplify", "Simplify", ""), (
         "Convex hull", "Convex hull", ""), ("Disabled", "Disabled", "")), default="Simplify")
 
-    join_components: BoolProperty(name="Join components", default=True)
+    join_components: BoolProperty(name="Join components", default=False)
     use_existing: BoolProperty(name="Use existing textures", default=True)
-    create_pcb: BoolProperty(name="Create PCB mesh from Edge_Cut layer", default=True)
+    create_pcb: BoolProperty(name="Create PCB mesh from Edge_Cut layer", default=False)
 
     def __init__(self):
         super().__init__()
 
     def execute(self, context):
-
         filepath = Path(self.filepath)
+
+        # import boards
+        self.pcb_material="PERFORMANCE"
+        if (pcb := self.import_pcb3d(context, filepath)) == {"CANCELLED"}:
+            return {"CANCELLED"}
+        self._execute(context, pcb)
         # out_dir = os.path.join(str(filepath).replace(".pcb3d", ""), "layers")
         texture_dir = str(filepath).replace(".pcb3d", "")
 
         self.execute_optional()
 
-        tempdir, pcb3d_layers = openPCB3D(filepath)
+        tempdir, pcb3d_layers = read_pcb3d_layers(filepath)
         edges_path = os.path.join(tempdir, "Edge_Cuts.svg")
         if os.path.isfile(edges_path) and self.create_pcb:
             self.create_pcb_mesh(str(filepath))
@@ -86,7 +92,7 @@ class PCB2BLENDER_OT_import_pcb3d_texture(bpy.types.Operator, ImportHelper):
             wm.progress_update(counter)
         # update_progress = lambda: wm.progress_update(i)
         layers2texture(pcb3d_path, self.texture_dpi,
-                       self.pcb_material, True, update_progress)
+                       self.custom_material, True, update_progress)
 
     def execute_optional(self):
         ob = bpy.context.active_object
@@ -125,12 +131,13 @@ class PCB2BLENDER_OT_import_pcb3d_texture(bpy.types.Operator, ImportHelper):
         bpy.ops.object.mode_set(mode='OBJECT')
 
     def draw(self, context):
+        self._draw(context)
         layout = self.layout
 
         col = layout.column()
         col.label(text="PCB Material")
-        col.prop(self, "pcb_material", text="")
-        col.prop(self, "texture_dpi", slider=True)
+        col.prop(self, "custom_material", text="")
+        # col.prop(self, "texture_dpi", slider=True)
         layout.split()
 
         col2 = layout.column()
@@ -279,3 +286,11 @@ def menu_func_import_pcb3d_texture(self, context):
 # def unregister():
 #     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d_texture)
 #     bpy.utils.unregister_class(PCB2BLENDER_OT_import_pcb3d_texture)
+
+
+def register():
+    pass
+
+
+def unregister():
+    pass
