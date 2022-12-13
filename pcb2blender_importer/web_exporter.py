@@ -76,11 +76,12 @@ def menu_func_export_pcb_web(self, context):
         PCB2BLENDER_OT_export_pcb_web.bl_idname, text="GLTF for web (.glb)")
 
 
-# def register():
-#     bpy.utils.register_class(PCB2BLENDER_OT_import_pcb3d_texture)
-#     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_pcb3d_texture)
+
+def register():
+    bpy.utils.register_class(PCB2BLENDER_OT_export_pcb_web)
+    bpy.types.TOPBAR_MT_file_export.append(menu_func_export_pcb_web)
 
 
-# def unregister():
-#     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d_texture)
-#     bpy.utils.unregister_class(PCB2BLENDER_OT_import_pcb3d_texture)
+def unregister():
+    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_pcb_web)
+    bpy.utils.unregister_class(PCB2BLENDER_OT_export_pcb_web)

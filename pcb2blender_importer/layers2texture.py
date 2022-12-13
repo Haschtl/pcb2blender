@@ -1,6 +1,4 @@
-# uv-mapping
 # create mesh from svg
-
 # replace svg-export durch -> gerber -> svg
 
 

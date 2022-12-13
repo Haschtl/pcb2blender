@@ -20,7 +20,7 @@ dependencies = {
     "gerber-renderer":"gerber_renderer",
     "PyYAML":"yaml"
 }
-module_names = ("importer", "materials", "solder_joints")
+module_names = ("importer", "materials", "solder_joints", "web_exporter", "texture_importer")
 
 dependency_path = (Path(__file__).parent / "site-packages").resolve()
 dependency_path.mkdir(exist_ok=True)

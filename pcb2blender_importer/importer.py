@@ -16,13 +16,11 @@ from glob import glob
 from skia import SVGDOM, Stream, Surface, Color4f
 from PIL import Image, ImageOps
 
-from .materials import setup_pcb_material, merge_materials, enhance_materials
+from .materials import setup_pcb_material, merge_materials, enhance_materials, setup_pcb_eevee_material
 
 from io_scene_x3d import ImportX3D, X3D_PT_import_transform, import_x3d
 from io_scene_x3d import menu_func_import as menu_func_import_x3d_original
 
-from .texture_importer import create_material
-from .web_exporter import PCB2BLENDER_OT_export_pcb_web, menu_func_export_pcb_web
 from .shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, BOUNDS, STACKED, PADS, INCLUDED_LAYERS, REQUIRED_MEMBERS, SKIA_MAGIC, INCH_TO_MM, regex_filter_components
 from .layers2texture import layers2texture
 from .uv_materials import defaultLayerStack, material_presets
@@ -220,12 +218,13 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         if self.merge_materials:
             merge_materials(self.component_cache.values())
 
-        for material in self.new_materials.copy():
-            if not material.users:
-                self.new_materials.remove(material)
-                bpy.data.materials.remove(material)
+        if self.pcb_material != "PERFORMANCE":
+            for material in self.new_materials.copy():
+                if not material.users:
+                    self.new_materials.remove(material)
+                    bpy.data.materials.remove(material)
 
-        if self.enhance_materials:
+        if self.enhance_materials and self.pcb_material != "PERFORMANCE":
             enhance_materials(self.new_materials)
 
         return {"FINISHED"}
@@ -348,15 +347,31 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             board_material = pcb_object.data.materials[0]
             setup_pcb_material(board_material.node_tree, images)
         elif self.enhance_materials and self.pcb_material == "PERFORMANCE":
+            # if can_enhance:
+            # self.enhance_pcb_layers(context, layers)
+            # _pcb_objects = list(layers.values())
+            # pcb_object = _pcb_objects[0]
+            # bpy.ops.object.select_all(action="DESELECT")
+            # for obj in _pcb_objects:
+            #     obj.select_set(True)
+
+            # for obj in _pcb_objects[2:]:
+            #     bpy.data.objects.remove(obj)
+            # context.view_layer.objects.active = pcb_object
+            # bpy.ops.object.join()
+            # bpy.ops.object.transform_apply()
+
+
             for obj in pcb_objects[1:]:
                 bpy.data.objects.remove(obj)
             pcb_object = pcb_objects[0]
 
             pcb_object.data.transform(Matrix.Diagonal((1, 1, 1.015, 1)))
 
-            board_material = pcb_object.data.materials[0]
+            # board_material = pcb_object.data.materials[0]
             # setup_pcb_material(board_material.node_tree, images)
             self.create_blender_material(pcb_object, texture_dir)
+
         else:
             if can_enhance:
                 self.enhance_pcb_layers(context, layers)
@@ -858,7 +873,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
         for group in groups:
             print(f"Creating material for {group}")
-            new_mat = create_material(group+"_material", groups[group])
+            new_mat = setup_pcb_eevee_material(group+"_material", groups[group])
             # Assign it to object
             # if pcb_object.data.materials:
             #     # assign to 1st material slot
@@ -956,8 +971,9 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         layout.prop(self, "cut_boards")
         layout.prop(self, "stack_boards")
         layout.split()
-
-        layout.prop(self, "merge_materials")
+        if not self.pcb_material == "PERFORMANCE":
+            layout.prop(self, "merge_materials")
+        
         layout.prop(self, "enhance_materials")
         col = layout.column()
         col.enabled = self.enhance_materials
@@ -1165,7 +1181,6 @@ classes = (
     PCB2BLENDER_OT_import_pcb3d,
     PCB2BLENDER_OT_import_x3d,
     PCB2BLENDER_PT_import_transform_x3d,
-    PCB2BLENDER_OT_export_pcb_web
 )
 
 def register():
@@ -1177,12 +1192,8 @@ def register():
 
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_pcb3d)
 
-    bpy.types.TOPBAR_MT_file_export.append(menu_func_export_pcb_web)
-
 def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_pcb3d)
-
-    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_pcb_web)
 
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_x3d)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_x3d_original)
