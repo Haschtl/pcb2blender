@@ -16,15 +16,17 @@ class PCB2BLENDER_OT_export_pcb_web(bpy.types.Operator, ImportHelper):
         "Convex hull", "Convex hull", ""), ("Disabled", "Disabled", "")), default="Simplify")
 
     join_components: BoolProperty(name="Join components", default=True)
+    random_rename: BoolProperty(name="Randomly rename objects", default=True)
 
     def __init__(self):
         super().__init__()
 
 
     def execute(self, context):
-        ob = bpy.context.active_object
-        # Enter "Edge" select mode
+        # ob = bpy.context.active_object
         bpy.ops.object.mode_set(mode='EDIT')
+        ob = bpy.data.objects[0]
+        # Enter "Edge" select mode
         bpy.context.tool_settings.mesh_select_mode = [False, True, False]
         if self.simplify_mesh == "Simplify":
             bpy.ops.mesh.select_all(action='DESELECT')
@@ -40,8 +42,8 @@ class PCB2BLENDER_OT_export_pcb_web(bpy.types.Operator, ImportHelper):
             bpy.ops.mesh.convex_hull(delete_unused=True, use_existing_faces=True, make_holes=False, join_triangles=True,
                                      face_threshold=0.698132, shape_threshold=0.698132, uvs=False, vcols=False, seam=False, sharp=False, materials=False)
         if self.join_components:
-            mesh = ob.data
-            bm = bmesh.from_edit_mesh(mesh)
+            # mesh = ob.data
+            # bm = bmesh.from_edit_mesh(mesh)
 
             bpy.ops.object.mode_set(mode='OBJECT')
             bpy.ops.object.select_all(action="DESELECT")
@@ -51,11 +53,22 @@ class PCB2BLENDER_OT_export_pcb_web(bpy.types.Operator, ImportHelper):
                     bpy.ops.object.select_all()
                     bpy.ops.object.join()
                     bpy.ops.object.select_all(action="DESELECT")
-                    subobject.name = f"c{idx}"
-                    subobject.data.name = f"c{idx}_d"
+                    # subobject.name = f"c{idx}"
+                    # subobject.data.name = f"c{idx}_d"
                 except Exception:
                     print("Joining failed")
+        if self.random_rename:
+            for i1, ob in enumerate(bpy.data.objects):
+                ob.name = f"c{i1}"
+                ob.data.name = f"c{i1}_d"
+                for i2, sob in enumerate(ob.children):
+                    sob.name = f"c{i1}_{i2}"
+                    sob.data.name = f"c{i1}_{i2}_d"
+
+
         bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.export_scene.gltf(
+            filepath=self.filepath, export_copyright="pcb2blender", export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=6)
         return {"FINISHED"}
 
     def draw(self, context):
