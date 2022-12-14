@@ -11,10 +11,10 @@ import argparse
 
 try:
     from .shared import openPCB3D, svg2img, gerber2svg
-    from .uv_materials import select_material, material_presets
+    from .eevee_materials import select_material, material_presets
 except ImportError:
     from shared import openPCB3D, svg2img, gerber2svg
-    from uv_materials import select_material, material_presets
+    from eevee_materials import select_material, material_presets
 
 def layer2img(layer):
     layer = layer.astype(np.uint8)
@@ -194,6 +194,7 @@ def _layers2texture(name: str, files, dpi: float, materials: dict, save: bool = 
     # Initialize maps
     img_shape = list(np.array(layers[list(layers.keys())[0]]).shape)
     base_color = np.ones(img_shape)*50  # Default color
+    base_color[:, :, 3] = 255
     heightmap = np.zeros(img_shape[:2])  # for normalmap
     _metalness = np.zeros(img_shape)
     _roughness = np.ones(img_shape)*50
@@ -213,7 +214,7 @@ def _layers2texture(name: str, files, dpi: float, materials: dict, save: bool = 
 
     # Process each layer
     for layer in ordered_layers:
-        material = select_material(name+"."+layer, materials)
+        texture = select_material(name+"."+layer, materials, dpi)
         print(f"Processing {layer}")
 
         if "Mask" in layer and dpi > 2000:
@@ -230,26 +231,26 @@ def _layers2texture(name: str, files, dpi: float, materials: dict, save: bool = 
             heightmap = heightmap/scale
 
         buffer2 = np.array(layers[layer], dtype=np.float64)
-        if material["invert"]:
+        if texture.invert:
             # If layer-SVG is inverted
             buffer2[:, :, 0] = buffer2[:, :, 0]*-1+255
             buffer2[:, :, 1] = buffer2[:, :, 1]*-1+255
             buffer2[:, :, 2] = buffer2[:, :, 2]*-1+255
-        buffer2[:, :, 0] *= material["base_color"][0]/255
-        buffer2[:, :, 1] *= material["base_color"][1]/255
-        buffer2[:, :, 2] *= material["base_color"][2]/255
+        # buffer2[:, :, 0] *= material["base_color"][0]/255
+        # buffer2[:, :, 1] *= material["base_color"][1]/255
+        # buffer2[:, :, 2] *= material["base_color"][2]/255
 
         for row_idx, row in enumerate(buffer2):
             for col_idx, e in enumerate(row):
                 if buffer2[row_idx, col_idx, 0] != 0 and buffer2[row_idx, col_idx, 1] != 0 and buffer2[row_idx, col_idx, 2] != 0:
+                    material = texture.get_at_pixel(row_idx, col_idx)
                     ratio1 = (255-material["base_color"][3])/255
                     ratio2 = material["base_color"][3]/255
                     base_color[row_idx, col_idx] = base_color[row_idx,
-                                                              col_idx] * ratio1+buffer2[row_idx, col_idx]*ratio2
+                                                              col_idx] * ratio1+np.array(material["base_color"])*ratio2
 
                     for key in MAPS:
-                        maps[key][row_idx, col_idx] = [
-                            material[key], material[key], material[key], 255]
+                        maps[key][row_idx, col_idx] = material[key]
                     heightmap[row_idx, col_idx] += material["height"]
         if progress_cb is not None:
             progress_cb()

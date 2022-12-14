@@ -23,7 +23,7 @@ from io_scene_x3d import menu_func_import as menu_func_import_x3d_original
 
 from .shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, BOUNDS, STACKED, PADS, INCLUDED_LAYERS, REQUIRED_MEMBERS, SKIA_MAGIC, INCH_TO_MM, regex_filter_components
 from .layers2texture import layers2texture
-from .uv_materials import defaultLayerStack, material_presets
+from .eevee_materials import defaultLayerStack, material_presets
 
 PCB_THICKNESS = 1.6  # mm
 BOARD_INFO = "board.yaml"
