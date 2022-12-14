@@ -1,0 +1,19 @@
+image: nytimes/blender:3.3.1-cpu-ubuntu18.04
+
+stages:
+  - init
+  - export
+
+install_plugin:
+  stage: init
+  script:
+    # Check blender installation
+    # Download plugin
+    - wget https://github.com/haschtl/pcb2blender/releases/download/v2.1/pcb2blender_importer_2-1.zip
+
+export_3d:
+  stage: export
+  script:
+    # Run the converter
+    - python3 ./blender_pcb2gltf.py
+    # Grab all files and upload via sftp

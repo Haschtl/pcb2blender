@@ -1,0 +1,14 @@
+image: ghcr.io/inti-cmnb/kicad6_auto:latest
+
+stages:
+  - export
+
+
+export_pcb3d:
+  stage: export
+  script:
+    # Run the exporter
+    - python3 -m kibot -c ./pcb2blender_exporter.kibot.yaml
+    # Add pads defintions
+    # Pack .pcb3d file
+    # Grab all files and upload via sftp
