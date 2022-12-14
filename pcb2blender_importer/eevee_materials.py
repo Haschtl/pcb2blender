@@ -165,10 +165,10 @@ Textures = {
         "base_color": "./textures/fr4/merged_material_Base_color.png",
         "metalness": "./textures/fr4/merged_material_Metallic.png",
         "roughness": "./textures/fr4/merged_material_Roughness.png",
+        # "roughness": "./textures/fr4/PCB_fibers.png",
         "emissive": "./textures/fr4/merged_material_Emissive.png",
-        "occlusion": "./textures/fr4/PCB_fibers.png",
         "heightmap": "./textures/fr4/merged_material_Height.png",
-        "dpi": 1024
+        "dpi": 512
     },
 }
 Layers = {
@@ -338,6 +338,7 @@ class Texture():
         self.layer_type = layer_type
         self.color=color
         print(f"Texture for {id} in {color}")
+        scale_factor = self.target_dpi/self.material["dpi"]
         for t in self.material:
             if type(self.material[t]) == str:
                 print(f"- {t}: {self.material[t]}")
@@ -346,7 +347,8 @@ class Texture():
                 # png.load()  # required for png.split()
                 # background = Image.new("RGB", png.size, (255, 255, 255))
                 # background.paste(png, mask=png.split()[3])  # 3 is the alpha channel
-                self.material[t]=png
+                newsize = (int(png.size[0]*scale_factor), int(png.size[1]*scale_factor))
+                self.material[t]=png.resize(newsize)
             else:
                 print(f"- {t}: Simple")
 
@@ -364,13 +366,14 @@ class Texture():
             elif t == "height":
                 if "heightmap" in self.material:
                     width, height = self.material["heightmap"].size
-                    x = int(x/self.target_dpi*self.material["dpi"]) % width
-                    y = int(y/self.target_dpi*self.material["dpi"]) % height
+                    x = x % width
+                    y = y % height
                     pixel = self.material["heightmap"].getpixel((x, y))
                     if type(pixel)!=int and type(pixel)!=float:
                         pixel=pixel[0]
-                    output[t] = self.material[t] * \
-                        pixel/255
+                    # output[t] = self.material[t] * \
+                    #     pixel/255
+                    output[t] = self.material[t] + self.material[t]*pixel/255/2
                 else:
                     output[t] = self.material[t]
             elif type(self.material[t]) == int or type(self.material[t]) == float:
@@ -382,8 +385,8 @@ class Texture():
                 output[t] = self.material[t]
             else:
                 width, height = self.material[t].size
-                x = int(x/self.target_dpi*self.material["dpi"]) % width
-                y = int(y/self.target_dpi*self.material["dpi"]) % height
+                x = x % width
+                y = y % height
                 pixel = self.material[t].getpixel((x, y))
                 if type(pixel)==int:
                     output[t] = [pixel, pixel, pixel]

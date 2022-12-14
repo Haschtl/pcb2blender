@@ -35,7 +35,7 @@ def pcb2gltf(pcb3d_path):
     #     filepath=gltf_path, export_copyright=export_copyright, export_draco_mesh_compression_enable, export_draco_mesh_compression_level)
 
     bpy.ops.wm.read_homefile(use_empty=True)
-    bpy.ops.pcb2blender.import_pcb3d(filepath=pcb3d_path, pcb_material="RASTERIZED")
+    bpy.ops.pcb2blender.import_pcb3d(filepath=pcb3d_path, pcb_material="RASTERIZED", enhance_materials=True)
     bpy.ops.wm.save_as_mainfile(filepath=out_path+"_HD.blend")
 
     bpy.ops.wm.read_homefile(use_empty=True)

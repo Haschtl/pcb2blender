@@ -68,7 +68,7 @@ class PCB2BLENDER_OT_export_pcb_web(bpy.types.Operator, ImportHelper):
 
         bpy.ops.object.mode_set(mode='OBJECT')
         bpy.ops.export_scene.gltf(
-            filepath=self.filepath, export_copyright="pcb2blender", export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=6)
+            filepath=self.filepath, export_copyright="pcb2blender", export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=6, export_colors=False)
         return {"FINISHED"}
 
     def draw(self, context):

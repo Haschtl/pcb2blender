@@ -112,7 +112,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
     center_pcb:        BoolProperty(name="Center PCB", default=True)
 
     merge_materials:   BoolProperty(name="Merge Materials", default=True)
-    enhance_materials: BoolProperty(name="Enhance Materials", default=True)
+    enhance_materials: BoolProperty(name="Enhance Materials", default=False)
 
     cut_boards:        BoolProperty(name="Cut PCBs", default=True)
     stack_boards:      BoolProperty(name="Stack PCBs", default=True)
@@ -224,7 +224,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                     self.new_materials.remove(material)
                     bpy.data.materials.remove(material)
 
-        if self.enhance_materials and self.pcb_material != "PERFORMANCE":
+        if self.enhance_materials:
             enhance_materials(self.new_materials)
 
         return {"FINISHED"}
@@ -292,7 +292,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
                 images[layer] = image
 
-        if self.enhance_materials and self.pcb_material == "PERFORMANCE":
+        if self.pcb_material == "PERFORMANCE":
             texture_dir = str(filepath).replace(".pcb3d", "")
             if not self.use_existing or not os.path.isfile(os.path.join(texture_dir, "base_color.png")):
                 self.create_texture_maps(pcb, str(filepath))
@@ -337,16 +337,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
         pcb_meshes = {obj.data for obj in pcb_objects if obj.type == "MESH"}
 
-        if self.enhance_materials and self.pcb_material == "RASTERIZED":
-            for obj in pcb_objects[1:]:
-                bpy.data.objects.remove(obj)
-            pcb_object = pcb_objects[0]
-
-            pcb_object.data.transform(Matrix.Diagonal((1, 1, 1.015, 1)))
-
-            board_material = pcb_object.data.materials[0]
-            setup_pcb_material(board_material.node_tree, images)
-        elif self.enhance_materials and self.pcb_material == "PERFORMANCE":
+        if self.pcb_material == "PERFORMANCE":
             # if can_enhance:
             # self.enhance_pcb_layers(context, layers)
             # _pcb_objects = list(layers.values())
@@ -366,11 +357,23 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                 bpy.data.objects.remove(obj)
             pcb_object = pcb_objects[0]
 
+            # mode = pcb_object.mode
+            bpy.context.view_layer.objects.active = pcb_object
+
             pcb_object.data.transform(Matrix.Diagonal((1, 1, 1.015, 1)))
 
             # board_material = pcb_object.data.materials[0]
             # setup_pcb_material(board_material.node_tree, images)
             self.create_blender_material(pcb_object, texture_dir)
+        elif self.enhance_materials and self.pcb_material == "RASTERIZED":
+            for obj in pcb_objects[1:]:
+                bpy.data.objects.remove(obj)
+            pcb_object = pcb_objects[0]
+
+            pcb_object.data.transform(Matrix.Diagonal((1, 1, 1.015, 1)))
+
+            board_material = pcb_object.data.materials[0]
+            setup_pcb_material(board_material.node_tree, images)
 
         else:
             if can_enhance:
@@ -976,7 +979,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         
         layout.prop(self, "enhance_materials")
         col = layout.column()
-        col.enabled = self.enhance_materials
+        # col.enabled = self.enhance_materials
         col.label(text="PCB Material")
         col.prop(self, "pcb_material", text="")
         if self.pcb_material == "RASTERIZED" or self.pcb_material == "PERFORMANCE":

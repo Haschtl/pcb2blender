@@ -1,5 +1,6 @@
 # create mesh from svg
 # replace svg-export durch -> gerber -> svg
+# textures
 
 
 # from typing import List, Dict, TypedDict, Tuple
