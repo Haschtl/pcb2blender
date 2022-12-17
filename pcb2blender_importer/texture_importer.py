@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 
 
-from .layers2texture import layers2texture
-from .shared import openPCB3D
+from .uv_creator.layers2texture import layers2texture
+from .uv_creator.shared import openPCB3D
 from .materials import setup_pcb_eevee_material
 counter = 0
 

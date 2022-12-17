@@ -8,4 +8,24 @@ orig/
 
 pcb2blender_importer/layers
 pcb2blender_importer/layers_cc
-pcb2blender_importer/textures
+pcb2blender_importer/textures/**/*
+
+!/pcb2blender_importer/textures/pb/
+!/pcb2blender_importer/textures/gold/
+!/pcb2blender_importer/textures/silver/
+!/pcb2blender_importer/textures/cu/
+!/pcb2blender_importer/textures/al/
+!/pcb2blender_importer/textures/plastic/
+!/pcb2blender_importer/textures/fr4/
+!/pcb2blender_importer/textures/al/
+
+!/pcb2blender_importer/textures/pb/Metal032_2K_*
+!/pcb2blender_importer/textures/gold/Metal034_2K_*
+!/pcb2blender_importer/textures/silver/Metal041A_*
+!/pcb2blender_importer/textures/cu/dull-copper_*
+!/pcb2blender_importer/textures/al/Aluminum-Scuffed_*
+!/pcb2blender_importer/textures/plastic/scuffed-plastic_*
+!/pcb2blender_importer/textures/fr4/merged_material_*
+!/pcb2blender_importer/textures/al/Aluminum-Scuffed_*
+/**/*_Normal*.png
+/**/*_PREVIEW*.jpg

@@ -21,9 +21,9 @@ from .materials import setup_pcb_material, merge_materials, enhance_materials, s
 from io_scene_x3d import ImportX3D, X3D_PT_import_transform, import_x3d
 from io_scene_x3d import menu_func_import as menu_func_import_x3d_original
 
-from .shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, BOUNDS, STACKED, PADS, INCLUDED_LAYERS, REQUIRED_MEMBERS, SKIA_MAGIC, INCH_TO_MM, regex_filter_components
-from .layers2texture import layers2texture
-from .eevee_materials import defaultLayerStack, material_presets
+from .uv_creator.shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, BOUNDS, STACKED, PADS, INCLUDED_LAYERS, REQUIRED_MEMBERS, SKIA_MAGIC, INCH_TO_MM, regex_filter_components
+from .uv_creator.layers2texture import layers2texture
+from .uv_creator.eevee_materials import defaultLayerStack, material_presets
 
 PCB_THICKNESS = 1.6  # mm
 BOARD_INFO = "board.yaml"
@@ -135,11 +135,18 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
     
     custom_material:   EnumProperty(name="PCB Color", default="Auto",
-                                    items=(("Green", "Green", ""), ("Red", "Red", ""), ("Blue", "Blue", ""), ("White", "White", ""), ("Black", "Black", ""),("Auto","Auto","")))
+                                    items=(("Green", "Green", ""), ("Red", "Red", ""), ("Blue", "Blue", ""), ("White", "White", ""), ("Black", "Black", ""), ("Violet", "Violet", ""), ("Yellow", "Yellow", ""), ("Auto", "Auto", "")))
     use_existing:      BoolProperty(name="Use existing textures", default=True)
     create_pcb:        BoolProperty(name="Create PCB mesh from Edge_Cut layer", default=False)
 
     filter_glob:       StringProperty(default="*.pcb3d", options={"HIDDEN"})
+
+    use_metalness_map:  BoolProperty(name="Metalness", default=True)
+    use_roughness_map:  BoolProperty(name="Roughness", default=True)
+    use_emissive_map:   BoolProperty(name="Emissive", default=False)
+    use_occlusion_map:  BoolProperty(name="Occlusion", default=False)
+    use_specular_map:   BoolProperty(name="Specular", default=False)
+    is_twosided:        BoolProperty(name="Two-Sided", default=False)
 
     def __init__(self):
         self.last_fpnl_path = ""
@@ -294,7 +301,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
         if self.pcb_material == "PERFORMANCE":
             texture_dir = str(filepath).replace(".pcb3d", "")
-            if not self.use_existing or not os.path.isfile(os.path.join(texture_dir, "base_color.png")):
+            if not self.use_existing or (not os.path.isfile(os.path.join(texture_dir, "base_color.jpeg")) and not os.path.isfile(os.path.join(texture_dir, "base_color.png"))):
                 self.create_texture_maps(pcb, str(filepath))
             else:
                 print("Did not create new texture. Using existing ones")
@@ -373,7 +380,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             pcb_object.data.transform(Matrix.Diagonal((1, 1, 1.015, 1)))
 
             board_material = pcb_object.data.materials[0]
-            setup_pcb_material(board_material.node_tree, images)
+            setup_pcb_material(board_material.node_tree, images, pcb.stackup)
 
         else:
             if can_enhance:
@@ -471,15 +478,34 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         solder_joint_cache = {}
         if self.add_solder_joints != "NONE" and pcb.pads:
             for pad_name, pad in pcb.pads.items():
+                # print(pad_name)
+                # print(pad)
                 if self.add_solder_joints == "SMART":
-                    if not pad.has_model or not pad.is_tht_or_smd:
+                    if not pad.has_model:
+                        print(f"skipping solder joint for '{pad_name}', "
+                              f" has no model - not skipping")
+                        # continue
+                    if not pad.is_tht_or_smd:
+                        print(f"skipping solder joint for '{pad_name}', "
+                              f"SMD is THT or SMD")
                         continue
                     if pad.pad_type == PadType.SMD and not pad.has_paste:
+                        print(f"skipping solder joint for '{pad_name}', "
+                            f"SMD has no paste")
                         continue
 
                 if not pad.pad_type in {PadType.THT, PadType.SMD}:
+                    print(f"skipping solder joint for '{pad_name}', "
+                          f"unknown type '{pad.pad_type}'")
                     continue
                 if pad.shape == PadShape.UNKNOWN or pad.drill_shape == DrillShape.UNKNOWN:
+                    if pad.shape == PadShape.UNKNOWN:
+                        print(f"skipping solder joint for '{pad_name}', "
+                            f"unknown shape '{pad.shape}'")
+                    else:
+                        print(f"skipping solder joint for '{pad_name}', "
+                              f"unknown drillshape '{pad.shape}'")
+                        
                     continue
 
                 pad_type = pad.pad_type.name
@@ -513,9 +539,9 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                     )
                     solder_joint = context.object
                     solder_joint_cache[cache_id] = solder_joint
-
                 obj = solder_joint.copy()
                 obj.name = f"SOLDER_{pad_name}"
+                print(f"Adding solder joint SOLDER_{pad_name}")
                 obj.location.xy = pad.position * MM_TO_M
                 obj.rotation_euler.z = pad.rotation
                 obj.scale.z *= 1.0 if pad.is_flipped ^ (pad.pad_type == PadType.SMD) else -1.0
@@ -726,6 +752,27 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         uv_layer = mesh.uv_layers[0]
         uv_layer.data.foreach_set("uv", uvs.flatten())
 
+        prevMode = obj.mode
+
+        bpy.ops.object.mode_set(mode='EDIT', toggle=False)
+
+
+        bm = bmesh.from_edit_mesh(obj.data)
+
+        uv_layer = bm.loops.layers.uv.verify()
+        #Selects faces going side
+        # for face in obj.data.polygons:
+        for face in bm.faces:
+            face.select = GoingSide(face.normal)
+            if GoingSide(face.normal):
+                for l in face.loops:
+                    # l[uv_layer].uv = (l[uv_layer].uv[0], l[uv_layer].uv[1] + 1)
+                    l[uv_layer].uv = (.6,0.0)
+                
+        bmesh.update_edit_mesh(obj.data)
+
+        bpy.ops.object.mode_set(mode=prevMode, toggle=False)
+
 
 
     @staticmethod
@@ -838,6 +885,11 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         o = bpy.data.objects.new("pcb", mesh.copy())
         bpy.context.scene.collection.objects.link(o)
 
+    @property
+    def ignore_maps(self):
+        return {"metalness": not self.use_metalness_map, "roughness": not self.use_roughness_map, "emissive": not self.use_emissive_map, "occlusion": not self.use_occlusion_map, "specular": not self.use_specular_map}
+
+
     def create_texture_maps(self, pcb, pcb3d_path: str):
         wm = bpy.context.window_manager
         tot = 2*10
@@ -853,14 +905,15 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
         # update_progress = lambda: wm.progress_update(i)
         layers2texture(pcb3d_path, self.texture_dpi,
-                       pcb.stackup, True, update_progress)
+                       pcb.stackup, True, update_progress, ignore_maps=self.ignore_maps, is_twosided=self.is_twosided)
 
     def create_blender_material(self, pcb_object, maps_dir: str):
         # pcb_object = bpy.context.active_object
         pcb_object.data.materials.clear()
         print("Creating blender materials")
-        layer_paths = list(
-            glob(os.path.join(maps_dir, '*.png'), recursive=False))
+        # layer_paths = list(
+        #     glob(os.path.join(maps_dir, '*.png'), recursive=False))
+        layer_paths = [x for e in ['*.png', '*.jpeg', '*.jpg', '*.txt'] for x in glob(os.path.join(maps_dir, e))]
         # groups: Dict[str, List[str]] = {}
         groups = {}
         for path in sorted(layer_paths, reverse=True):
@@ -1016,12 +1069,21 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             col = layout.column()
             col.label(text="PCB Material")
             col.prop(self, "custom_material", text="")
+            col.prop(self, "is_twosided")
             layout.split()
             col2 = layout.column()
             col2.label(text="Use existing textures")
             col2.prop(self, "use_existing")
             col2.label(text="Create PCB Mesh from Edges_Cut layer")
             col2.prop(self, "create_pcb")
+            col3 = layout.column()
+            col3.label(text="Use maps")
+            col3.prop(self, "use_metalness_map")
+            col3.prop(self, "use_roughness_map")
+            col3.prop(self, "use_emissive_map")
+            col3.prop(self, "use_occlusion_map")
+            col3.prop(self, "use_specular_map")
+
 
     def error(self, msg):
         print(f"error: {msg}")
@@ -1172,6 +1234,23 @@ class PCB2BLENDER_PT_import_transform_x3d(X3D_PT_import_transform_copy):
 
 def has_svg2blender():
     return addon_utils.check("svg2blender_importer") == (True, True)
+
+
+def NormalInDirection(normal, direction, limit=0.5):
+    return direction.dot(normal) > limit
+
+
+def GoingUp(normal, limit=0.5):
+    return NormalInDirection(normal, Vector((0, 0, 1)), limit)
+
+
+def GoingDown(normal, limit=0.5):
+    return NormalInDirection(normal, Vector((0, 0, -1)), limit)
+
+
+def GoingSide(normal, limit=0.5):
+    return GoingUp(normal, limit) == False and GoingDown(normal, limit) == False
+
 
 def menu_func_import_pcb3d(self, context):
     self.layout.operator(PCB2BLENDER_OT_import_pcb3d.bl_idname, text="PCB (.pcb3d)")

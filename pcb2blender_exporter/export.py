@@ -93,7 +93,7 @@ def export_pcb3d(filepath, boarddefs):
                     struct.pack("!fff", *stacked.offset)
                 )
 
-        for footprint in board.Footprints():
+        for j, footprint in enumerate(board.Footprints()):
             has_model = len(footprint.Models()) > 0
             is_tht_or_smd = bool(
                 footprint.GetAttributes() & (pcbnew.FP_THROUGH_HOLE | pcbnew.FP_SMD))
@@ -102,7 +102,7 @@ def export_pcb3d(filepath, boarddefs):
             for i, pad in enumerate(footprint.Pads()):
                 # layers = [board.GetLayerName(id)
                 #           for id in pad.GetLayerSet().Seq()]
-                name = f"{value}_{reference}_{i}"
+                name = f"{value}_{reference}_{i}.{j}"
                 is_flipped = pad.IsFlipped()
                 has_paste = pad.IsOnLayer(pcbnew.B_Paste if is_flipped else pcbnew.F_Paste)
                 data = struct.pack(

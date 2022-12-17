@@ -77,7 +77,7 @@ def enhance_materials(materials):
 
         mat4cad_mat.setup_node_tree(material.node_tree)
 
-def setup_pcb_material(node_tree: bpy.types.NodeTree, images: dict[str, bpy.types.Image]):
+def setup_pcb_material(node_tree: bpy.types.NodeTree, images: dict[str, bpy.types.Image], stackup):
     node_tree.nodes.clear()
 
     nodes = {
@@ -124,6 +124,58 @@ def setup_pcb_material(node_tree: bpy.types.NodeTree, images: dict[str, bpy.type
         "output": ("ShaderNodeOutputMaterial", {"location": (240, 0)},
             {"Surface": ("shader", "Shader"), "Displacement": ("shader", "Displacement")}),
     }
+
+    for layer_id in stackup:
+        layer_type=layer_id.split(".")[1]
+        color = stackup[layer_id]["material"].upper()
+        if layer_type == "SilkS":
+            if color in ["BLACK", "WHITE"]:
+                nodes["silkscreen"][1]["silkscreen"] = color
+            else:
+                print(
+                    f'No automatic color selection for color {color} in layer {layer_type} available in RASTERIZE mode')
+        elif layer_type == "Mask":
+            if color in ["GREEN", "RED", "YELLOW", "BLUE", "WHITE", "BLACK", "MATTE_BLACK"]:
+                nodes["solder_mask"][1]["soldermask"] = color
+            else:
+                print(
+                    f'No automatic color selection for color {color} in layer {layer_type} available in RASTERIZE mode')
+        elif layer_type == "Board":
+            if color in ["FR4", "AL", "GOLD", "SILVER", "GREEN", "RED", "YELLOW", "BLUE", "WHITE", "BLACK"]:
+                if color in ["FR4"]:
+                    nodes["base_material"][1]["mat_base"]="PCB"
+                    nodes["base_material"][1]["mat_color"] = "pcb_yellow"
+                elif color in ["AL", "GOLD", "SILVER"]:
+                    nodes["base_material"][1]["mat_base"] = "METAL"
+                    if color in ["GOLD","SILVER"]:
+                        nodes["base_material"][1]["mat_color"] = color
+                    else:
+                        nodes["base_material"][1]["mat_color"] = "ALUMINIUM"
+                else:
+                    nodes["base_material"][1]["mat_base"] = "PLASTIC"
+                    if color == "GREEN":
+                        nodes["base_material"][1]["mat_color"] = "olive_green"
+                    elif color == "RED":
+                        nodes["base_material"][1]["mat_color"] = "wine_red"
+                    elif color == "YELLOW":
+                        nodes["base_material"][1]["mat_color"] = "golden_yellow"
+                    elif color == "BLUE":
+                        nodes["base_material"][1]["mat_color"] = "ultramarine_blue"
+                    elif color == "WHITE":
+                        nodes["base_material"][1]["mat_color"] = "pure_white"
+                    elif color == "BLACK":
+                        nodes["base_material"][1]["mat_color"] = "graphite_black"
+            else:
+                print(
+                    f'No automatic color selection for color {color} in layer {layer_type} available in RASTERIZE mode')
+        # elif layer == "Cu":
+        #     pass
+        # elif layer == "Paste":
+        #     nodes["solder"][1]
+        else:
+            print(
+                f'No automatic color selection for layer {layer_type} available in RASTERIZE mode')
+    
 
     setup_node_tree(node_tree, nodes)
 
@@ -639,43 +691,68 @@ def setup_pcb_eevee_material(material_name, files):
             # Begin constructing node tree for this material
             if 'base_color' in file:
                 print(f"Adding base color: {file}")
-                bt_node = nodes.new(type='ShaderNodeTexImage')
-                bt_node.image = bpy.data.images.load(file)
-                links.new(
-                    master_node.inputs['Base Color'], bt_node.outputs['Color'])
-                links.new(
-                    master_node.inputs['Alpha'], bt_node.outputs['Alpha'])
+                if file.endswith(".txt"):
+                    v=read_float_from_file(file)
+                    master_node.inputs['Base Color'].default_value =(v,v,v,v) 
+                else:
+                    bt_node = nodes.new(type='ShaderNodeTexImage')
+                    bt_node.image = bpy.data.images.load(file)
+                    links.new(
+                        master_node.inputs['Base Color'], bt_node.outputs['Color'])
+                    links.new(
+                        master_node.inputs['Alpha'], bt_node.outputs['Alpha'])
 
             if 'metal' in file:
                 print(f"Adding Metallic: {file}")
-                bt_node = nodes.new(type='ShaderNodeTexImage')
-                bt_node.image = bpy.data.images.load(file)
-                links.new(
-                    master_node.inputs['Metallic'], bt_node.outputs['Color'])
+                if file.endswith(".txt"):
+                    master_node.inputs['Metallic'].default_value = read_float_from_file(
+                        file)*5
+                else:
+                    bt_node = nodes.new(type='ShaderNodeTexImage')
+                    bt_node.image = bpy.data.images.load(file)
+                    links.new(
+                        master_node.inputs['Metallic'], bt_node.outputs['Color'])
 
             if 'specular' in file:
                 print(f"Adding Specular: {file}")
-                bt_node = nodes.new(type='ShaderNodeTexImage')
-                bt_node.image = bpy.data.images.load(file)
-                links.new(
-                    master_node.inputs['Specular'], bt_node.outputs['Color'])
+                
+                if file.endswith(".txt"):
+                    master_node.inputs['Specular'].default_value = read_float_from_file(
+                        file)
+                else:
+                    bt_node = nodes.new(type='ShaderNodeTexImage')
+                    bt_node.image = bpy.data.images.load(file)
+                    links.new(
+                        master_node.inputs['Specular'], bt_node.outputs['Color'])
 
             if 'roughness' in file:
                 print(f"Adding Roughness: {file}")
-                bt_node = nodes.new(type='ShaderNodeTexImage')
-                bt_node.image = bpy.data.images.load(file)
-                links.new(
-                    master_node.inputs['Roughness'], bt_node.outputs['Color'])
+                
+                if file.endswith(".txt"):
+                    master_node.inputs['Roughness'].default_value = read_float_from_file(
+                        file)
+                else:
+                    bt_node = nodes.new(type='ShaderNodeTexImage')
+                    bt_node.image = bpy.data.images.load(file)
+                    links.new(
+                        master_node.inputs['Roughness'], bt_node.outputs['Color'])
 
             if 'emissive' in file:
                 print(f"Adding Emissive: {file}")
-                bt_node = nodes.new(type='ShaderNodeTexImage')
-                bt_node.image = bpy.data.images.load(file)
-                links.new(
-                    master_node.inputs['Emission'], bt_node.outputs['Color'])
+                
+                v = read_float_from_file(
+                    file)
+                if file.endswith(".txt"):
+                    master_node.inputs['Emission'].default_value = (v,v,v,v)
+                else:
+                    bt_node = nodes.new(type='ShaderNodeTexImage')
+                    bt_node.image = bpy.data.images.load(file)
+                    links.new(
+                        master_node.inputs['Emission'], bt_node.outputs['Color'])
 
             if 'normal' in file:
                 print(f"Adding Normal: {file}")
+                
                 bmi_node = nodes.new(type='ShaderNodeTexImage')
                 bmi_node.image = bpy.data.images.load(file)
                 # bm_node = nodes.new(type='ShaderNodeBump')
@@ -715,3 +792,8 @@ def unregister():
         bpy.utils.unregister_class(cls)
 
     unregister_mat4cad()
+
+def read_float_from_file(path):
+    with open(path, "r") as f:
+        v = f.read()
+    return float(v)/256
