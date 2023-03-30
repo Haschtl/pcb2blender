@@ -3,10 +3,11 @@ from bpy_extras.io_utils import ImportHelper, orientation_helper, axis_conversio
 from bpy.props import *
 from mathutils import Vector, Matrix
 
-import tempfile, random, shutil, re, struct, math, io
+import tempfile, random, shutil, re, struct, io
+from math import inf, radians
 from pathlib import Path
 from zipfile import ZipFile, BadZipFile, Path as ZipPath
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 import numpy as np
 import os
@@ -16,7 +17,8 @@ from glob import glob
 from skia import SVGDOM, Stream, Surface, Color4f
 from PIL import Image, ImageOps
 
-from .materials import setup_pcb_material, merge_materials, enhance_materials, setup_pcb_eevee_material
+from .blender_addon_utils import ErrorHelper
+from .materials import *
 
 from io_scene_x3d import ImportX3D, X3D_PT_import_transform, import_x3d
 from io_scene_x3d import menu_func_import as menu_func_import_x3d_original
@@ -25,7 +27,18 @@ from .uv_creator.shared import PCB, COMPONENTS, LAYERS, LAYERS_BOUNDS, BOARDS, B
 from .uv_creator.layers2texture import layers2texture
 from .uv_creator.eevee_materials import defaultLayerStack, material_presets
 
-PCB_THICKNESS = 1.6  # mm
+
+# Disable PIL image size limit for large PCBs
+import PIL
+PIL.Image.MAX_IMAGE_PIXELS = 933120000
+
+INCLUDED_LAYERS = (
+    "F_Cu", "B_Cu", "F_Paste", "B_Paste", "F_SilkS", "B_SilkS", "F_Mask", "B_Mask"
+)
+
+REQUIRED_MEMBERS = {PCB, LAYERS}
+
+PCB_THICKNESS_MM = 1.6
 BOARD_INFO = "board.yaml"
 
 @dataclass
@@ -95,7 +108,7 @@ class PCB3D:
     pads: dict[str, Pad]
     stackup: dict[str,dict]
 
-class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
+class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper, ErrorHelper):
     """Import a PCB3D file"""
     bl_idname = "pcb2blender.import_pcb3d"
     bl_label = "Import .pcb3d"
@@ -109,28 +122,26 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                 "attributes set and that have 3D models and only to pads which have a "\
                 "solder paste layer (for SMD pads)"),
             ("ALL", "All", "Add solder joints to all pads")))
-    center_pcb:        BoolProperty(name="Center PCB", default=True)
 
-    merge_materials:   BoolProperty(name="Merge Materials", default=True)
-    enhance_materials: BoolProperty(name="Enhance Materials", default=False)
-
+    center_boards:     BoolProperty(name="Center PCB", default=True)
     cut_boards:        BoolProperty(name="Cut PCBs", default=True)
     stack_boards:      BoolProperty(name="Stack PCBs", default=True)
 
-    pcb_material:      EnumProperty(name="PCB Material", default="PERFORMANCE",
-                                    items=(("RASTERIZED", "Rasterized (Cycles)", ""), ("PERFORMANCE", "Rasterized (Web)", ""), ("3D", "3D (deprecated)", "")))
+    merge_materials:   BoolProperty(name="Merge Materials", default=True)
+    enhance_materials: BoolProperty(name="Enhance Materials", default=True)
+    pcb_material:      EnumProperty(name="PCB Material", default="RASTERIZED",
+        items=(("RASTERIZED", "Rasterized (Cycles)", ""), ("PERFORMANCE", "Rasterized (Web)", ""), ("3D", "3D (deprecated)", "")))
     texture_dpi:       FloatProperty(name="Texture DPI",
-        default=1016.0, soft_min=508.0, soft_max=2032.0)
+        default=1016.0, min=0.0, soft_min=508.0, soft_max=2032.0)
 
     import_fpnl:       BoolProperty(name="Import Frontpanel (.fpnl)", default=True,
         description="Import the specified .fpnl file and align it (if its stacked to a pcb).")
     fpnl_path:         StringProperty(name="", subtype="FILE_PATH",
         description="")
-
     fpnl_thickness:    FloatProperty(name="Panel Thickness (mm)",
-        default=2.0, soft_min=0.0, soft_max=5.0)
+        default=2.0, min=0.0, soft_max=5.0)
     fpnl_bevel_depth:  FloatProperty(name="Bevel Depth (mm)",
-        default=0.05, soft_min=0.0, soft_max=0.25)
+        default=0.05, min=0.0, soft_max=0.25)
     fpnl_setup_camera: BoolProperty(name="Setup Orthographic Camera", default=True)
 
     
@@ -193,9 +204,9 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                     stacked_obj = pcb.boards[name].obj
                     stacked_obj.parent = board.obj
 
-                    pcb_offset = Vector((0, 0, np.sign(offset.z) * PCB_THICKNESS))
+                    pcb_offset = Vector((0, 0, np.sign(offset.z) * PCB_THICKNESS_MM))
                     if name == "FPNL":
-                        pcb_offset.z += (self.fpnl_thickness - PCB_THICKNESS) * 0.5
+                        pcb_offset.z += (self.fpnl_thickness - PCB_THICKNESS_MM) * 0.5
                     stacked_obj.location = (offset + pcb_offset) * MM_TO_M
 
         # select pcb objects and make one active
@@ -206,9 +217,9 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         for board in top_level_boards:
             board.obj.select_set(True)
 
-        # center pcbs
+        # center boards
 
-        if self.center_pcb:
+        if self.center_boards:
             center = Vector((0, 0))
             for board in top_level_boards:
                 center += (board.bounds[0] + board.bounds[1]) * 0.5
@@ -288,7 +299,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                     back  = ImageOps.invert(back)
                 empty = Image.new("L", front.size)
 
-                png_path = layers_path / f"{layer}.png"
+                png_path = layers_path / f"{filepath.stem}_{layer}.png"
                 merged = Image.merge("RGB", (front, back, empty))
                 merged.save(png_path)
 
@@ -328,19 +339,14 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
 
         self.new_materials |= set(bpy.data.materials) - materials_before
 
-        # enhance pcb
+        # shutil.rmtree(tempdir)
 
-        can_enhance = len(pcb_objects) == len(PCB2_LAYER_NAMES)
-        if can_enhance:
-            layers = dict(zip(PCB2_LAYER_NAMES, pcb_objects))
-            for name, obj in layers.items():
-                obj.data.materials[0].name = name
+        # improve board mesh
 
-            board = layers["Board"]
-            self.improve_board_mesh(board.data)
-        else:
-            self.warning(f"cannot enhance pcb"\
-                f"(imported {len(pcb_objects)} layers, expected {len(PCB2_LAYER_NAMES)})")
+        board_obj = pcb_objects[0]
+        self.improve_board_mesh(context, board_obj)
+
+        # enhance materials
 
         pcb_meshes = {obj.data for obj in pcb_objects if obj.type == "MESH"}
 
@@ -380,10 +386,14 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             pcb_object.data.transform(Matrix.Diagonal((1, 1, 1.015, 1)))
 
             board_material = pcb_object.data.materials[0]
+            board_material.name = f"PCB_{filepath.stem}"
             setup_pcb_material(board_material.node_tree, images, pcb.stackup)
-
+            if self.import_components and self.add_solder_joints != "NONE":
+                for node_name in ("paste", "seperate_paste", "solder"):
+                    board_material.node_tree.nodes[node_name].mute = True
         else:
-            if can_enhance:
+            if len(pcb_objects) == len(PCB2_LAYER_NAMES):
+                layers = dict(zip(PCB2_LAYER_NAMES, pcb_objects))
                 self.enhance_pcb_layers(context, layers)
                 pcb_objects = list(layers.values())
 
@@ -404,6 +414,9 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         if not (has_multiple_boards := bool(pcb.boards and self.cut_boards)):
             name = f"PCB_{filepath.stem}"
             pcb_object.name = pcb_object.data.name = name
+            if self.enhance_materials and self.pcb_material == "RASTERIZED":
+                pcb_object.data.materials[0].name = name
+
             bounds = (
                 Vector(pcb_object.bound_box[3]).xy * M_TO_MM,
                 Vector(pcb_object.bound_box[5]).xy * M_TO_MM,
@@ -412,40 +425,77 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             pcb_object.data.transform(matrix.inverted())
             pcb_object.matrix_world = matrix @ pcb_object.matrix_world
 
-            pcb_board = Board(bounds, [], pcb_object)
-            pcb.boards[name] = pcb_board
+            pcb.boards.clear()
+            pcb.boards[name] = Board(bounds, [], pcb_object)
+
         else:
             pcb_mesh = pcb_object.data
             bpy.data.objects.remove(pcb_object)
             for name, board in pcb.boards.items():
                 board_obj = bpy.data.objects.new(f"PCB_{name}", pcb_mesh.copy())
                 context.collection.objects.link(board_obj)
-                boundingbox = self.get_boundingbox(context, board.bounds)
 
+                cut_material_index = len(board_obj.material_slots) + 1
+                boundingbox = self.get_boundingbox(context, board.bounds, cut_material_index)
                 self.cut_object(context, board_obj, boundingbox, "INTERSECT")
 
-                # get rid of the bounding box if it got merged into the board for some reason
-                # also reapply board edge vcs on the newly cut edge faces
+                # cleanup and reapply board edge vcs on the newly cut edge faces
                 bm = bmesh.new()
                 bm.from_mesh(board_obj.data)
 
-                for bb_vert in boundingbox.data.vertices:
-                    for vert in reversed(bm.verts[:]):
-                        if (bb_vert.co - vert.co).length_squared < 1e-8:
-                            bm.verts.remove(vert)
-                            break
+                bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-8)
+                bmesh.ops.triangulate(bm, faces=bm.faces)
 
-                board_edge = bm.loops.layers.color[0]
-                for bb_face in boundingbox.data.polygons:
-                    point = boundingbox.data.vertices[bb_face.vertices[0]].co
-                    board_faces = (face for face in bm.faces if face.material_index == 0)
-                    faces = self.get_overlapping_faces(board_faces, point, bb_face.normal)
-                    for face in faces:
-                        for loop in face.loops:
-                            loop[board_edge] = (1, 1, 1, 1)
+                board_edge = bm.faces.layers.int[LAYER_BOARD_EDGE]
+                for face in bm.faces:
+                    if face.material_index == cut_material_index:
+                        face[board_edge] = 1
+                        face.material_index = 0
+                
+                board_edge_faces = {face for face in bm.faces if face[board_edge]}
+                board_edge_verts = {vert for face in board_edge_faces for vert in face.verts}
+
+                keep_verts = set()
+                for face in board_edge_faces:
+                    for edge in face.edges:
+                        if not board_edge_faces.issuperset(edge.link_faces):
+                            continue
+                        if edge.calc_face_angle(0) < radians(5.0):
+                            continue
+                        keep_verts = keep_verts.union(edge.verts)
+
+                board_edge_verts = board_edge_verts - keep_verts
+
+                MERGE_DISTANCE = PCB_THICKNESS_MM * MM_TO_M * 0.5
+                MERGE_DISTANCE_SQ = MERGE_DISTANCE ** 2
+
+                targetmap = {}
+                for keep_vert in keep_verts:
+                    for vert in board_edge_verts - keep_verts:
+                        if (keep_vert.co - vert.co).length_squared < MERGE_DISTANCE_SQ:
+                            targetmap[vert] = keep_vert
+                            board_edge_verts.remove(vert)
+
+                edge_doubles = bmesh.ops.find_doubles(bm, verts=list(board_edge_verts),
+                    dist=MERGE_DISTANCE)
+
+                targetmap = targetmap | edge_doubles["targetmap"]
+                bmesh.ops.weld_verts(bm, targetmap=targetmap)
 
                 bm.to_mesh(board_obj.data)
                 bm.free()
+
+                # uvs get messed up by weld_verts
+                self.setup_uvs(board_obj, pcb.layers_bounds)
+
+                bpy.ops.object.select_all(action="DESELECT")
+                board_obj.select_set(True)
+                context.view_layer.objects.active = board_obj
+
+                bpy.ops.object.mode_set(mode="EDIT")
+                bpy.ops.mesh.beautify_fill(angle_limit=radians(1.0))
+                bpy.ops.mesh.tris_convert_to_quads() # !!! may collide with performance mode
+                bpy.ops.object.mode_set(mode="OBJECT")
 
                 bpy.data.objects.remove(boundingbox)
 
@@ -476,7 +526,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         # add solder joints
 
         solder_joint_cache = {}
-        if self.add_solder_joints != "NONE" and pcb.pads:
+        if self.import_components and self.add_solder_joints != "NONE" and pcb.pads:
             for pad_name, pad in pcb.pads.items():
                 # print(pad_name)
                 # print(pad)
@@ -552,6 +602,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             bpy.data.objects.remove(obj)
 
         if not has_multiple_boards:
+            pcb_board = next(iter(pcb.boards.values()))
             for obj in related_objects:
                 obj.location.xy -= pcb_board.bounds[0] * MM_TO_M
                 obj.parent = pcb_board.obj
@@ -565,7 +616,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                         break
                 else:
                     closest = None
-                    min_distance = math.inf
+                    min_distance = inf
                     for name, board in pcb.boards.items():
                         center = (board.bounds[0] + board.bounds[1]) * 0.5
                         distance = (obj.location.xy * M_TO_MM - center).length_squared
@@ -576,8 +627,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                     name, parent_board = closest
                     self.warning(
                         f"assigning \"{obj.name}\" (out of bounds) " \
-                        f"to closest board \"{name}\""
-                    )
+                        f"to closest board \"{name}\"")
 
                 obj.location.xy -= parent_board.bounds[0] * MM_TO_M
                 obj.parent = parent_board.obj
@@ -703,23 +753,24 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         return PCB3D(pcb_file_content, components, layers_bounds, boards, pads, stackup)
 
     @staticmethod
-    def get_boundingbox(context, bounds):
-        name = "pcb2blender_bounds_tmp"
-        mesh = bpy.data.meshes.new(name)
-        obj = bpy.data.objects.new(name, mesh)
+    def get_boundingbox(context, bounds, material_index):
+        NAME = "pcb2blender_bounds_tmp"
+        mesh = bpy.data.meshes.new(NAME)
+        obj = bpy.data.objects.new(NAME, mesh)
         context.collection.objects.link(obj)
 
-        margin = 0.01
-
+        MARGIN_MM = -0.01
         size = Vector((1.0, -1.0, 1.0)) * (bounds[1] - bounds[0]).to_3d()
-        scale =  (size + 2.0 * Vector((margin, margin, 5.0))) * MM_TO_M
-        translation = (bounds[0] - Vector.Fill(2, margin)).to_3d() * MM_TO_M
+        scale =  (size + 2.0 * Vector((MARGIN_MM, MARGIN_MM, 5.0))) * MM_TO_M
+        translation = (bounds[0] - Vector((MARGIN_MM, -MARGIN_MM))).to_3d() * MM_TO_M
         matrix_scale = Matrix.Diagonal(scale).to_4x4()
         matrix_offset = Matrix.Translation(translation)
         bounds_matrix = matrix_offset @ matrix_scale @ Matrix.Translation((0.5, -0.5, 0))
 
         bm = bmesh.new()
         bmesh.ops.create_cube(bm, matrix=bounds_matrix)
+        for face in bm.faces:
+            face.material_index = material_index
         bm.to_mesh(obj.data)
         bm.free()
 
@@ -794,40 +845,51 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         uv_layer.data.foreach_set("uv", uvs.flatten())
 
     @staticmethod
-    def improve_board_mesh(mesh):
+    def improve_board_mesh(context, obj):
         # fill holes in board mesh to make subsurface shading work
         # create vertex color layer for board edge and through holes
 
         bm = bmesh.new()
-        bm.from_mesh(mesh)
+        bm.from_mesh(obj.data)
 
-        board_edge = bm.loops.layers.color.new("Board Edge")
+        board_edge = bm.faces.layers.int.new(LAYER_BOARD_EDGE)
+        through_holes = bm.faces.layers.int.new(LAYER_THROUGH_HOLES)
 
+        board_edge_verts = set()
         for face in bm.faces:
-            color = ((1, 1, 1, 1) if abs(face.normal.z) < 1e-3 and face.calc_area() > 1e-10
-                else (0, 0, 0, 1))
-            for loop in face.loops:
-                loop[board_edge] = color
+            if abs(face.normal.z) < 1e-3 and face.calc_area() > 1e-10:
+                face[board_edge] = 1
+                board_edge_verts = board_edge_verts.union(face.verts)
 
-        n_upper_verts = len(bm.verts) // 2
+        midpoint = len(bm.verts) // 2
         bm.verts.ensure_lookup_table()
-        for i, vert in enumerate(bm.verts[:n_upper_verts]):
-            other_vert = bm.verts[n_upper_verts + i]
+        for i, top_vert in enumerate(bm.verts[:midpoint]):
+            if top_vert in board_edge_verts:
+                continue
+            bot_vert = bm.verts[midpoint + i]
             try:
-                bm.edges.new((vert, other_vert))
+                bm.edges.new((top_vert, bot_vert))
             except ValueError:
                 pass
 
-        filled = bmesh.ops.holes_fill(bm, edges=bm.edges[:])
+        filled = bmesh.ops.holes_fill(bm, edges=bm.edges)
 
-        through_holes = bm.loops.layers.color.new("Through Holes")
-        for face in bm.faces:
-            color = (1, 1, 1, 1) if face in filled["faces"] else (0, 0, 0, 1)
-            for loop in face.loops:
-                loop[through_holes] = color
+        for face in filled["faces"]:
+            face[through_holes] = 1
 
-        bm.to_mesh(mesh)
+        bm.to_mesh(obj.data)
         bm.free()
+
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.dissolve_limited(angle_limit=radians(1.0))
+        bpy.ops.mesh.quads_convert_to_tris()
+        bpy.ops.mesh.beautify_fill(angle_limit=radians(1.0))
+        bpy.ops.mesh.tris_convert_to_quads()
+        bpy.ops.object.mode_set(mode="OBJECT")
 
     @classmethod
     def enhance_pcb_layers(cls, context, layers):
@@ -983,23 +1045,6 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
             child.matrix_basis = matrix @ child.matrix_basis
 
     @staticmethod
-    def get_overlapping_faces(bm_faces, point, normal):
-        overlapping_faces = []
-        for face in bm_faces:
-            if (1.0 - normal.dot(face.normal)) > 1e-4:
-                continue
-
-            direction = point - face.verts[0].co
-            distance = abs(
-                direction.normalized().dot(face.normal) * direction.length)
-            if distance > 1e-4:
-                continue
-
-            overlapping_faces.append(face)
-
-        return overlapping_faces
-
-    @staticmethod
     def svg2img(svg_path, dpi):
         svg = SVGDOM.MakeFromStream(Stream.MakeFromFile(str(svg_path)))
         width, height = svg.containerSize()
@@ -1022,8 +1067,12 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
         layout = self.layout
 
         layout.prop(self, "import_components")
-        layout.prop(self, "center_pcb")
+        col = layout.column()
+        col.enabled = self.import_components
+        col.label(text="Add Solder Joints")
+        col.prop(self, "add_solder_joints", text="")
         layout.split()
+        layout.prop(self, "center_boards")
         layout.prop(self, "cut_boards")
         layout.prop(self, "stack_boards")
         layout.split()
@@ -1063,8 +1112,7 @@ class PCB2BLENDER_OT_import_pcb3d(bpy.types.Operator, ImportHelper):
                         self.fpnl_path = ""
             else:
                 self.fpnl_path = ""
-
-
+        
         if self.pcb_material == "PERFORMANCE":
             col = layout.column()
             col.label(text="PCB Material")
@@ -1157,7 +1205,7 @@ class PCB2BLENDER_OT_import_x3d(bpy.types.Operator, ImportHelper):
     scale:             FloatProperty(name="Scale", default=FIX_X3D_SCALE, precision=5)
 
     def execute(self, context):
-        bpy.ops.object.select_all(action='DESELECT')
+        bpy.ops.object.select_all(action="DESELECT")
 
         objects_before = set(bpy.data.objects)
         matrix = axis_conversion(from_forward=self.axis_forward, from_up=self.axis_up).to_4x4()

@@ -11,6 +11,9 @@ from bpy.types import ShaderNodeCustomGroup
 from nodeitems_utils import NodeItem
 from nodeitems_builtins import ShaderNodeCategory
 
+LAYER_BOARD_EDGE = "pcb_board_edge"
+LAYER_THROUGH_HOLES = "pcb_through_holes"
+
 def merge_materials(meshes):
     merged_materials = {}
     for mesh in meshes:
@@ -126,6 +129,8 @@ def setup_pcb_material(node_tree: bpy.types.NodeTree, images: dict[str, bpy.type
     }
 
     for layer_id in stackup:
+        if len(layer_id.split("."))==1:
+            continue
         layer_type=layer_id.split(".")[1]
         color = stackup[layer_id]["material"].upper()
         if layer_type == "SilkS":
@@ -176,8 +181,7 @@ def setup_pcb_material(node_tree: bpy.types.NodeTree, images: dict[str, bpy.type
             print(
                 f'No automatic color selection for layer {layer_type} available in RASTERIZE mode')
     
-
-    setup_node_tree(node_tree, nodes)
+    setup_node_tree(node_tree, nodes, label_nodes=False)
 
 class ShaderNodeBsdfPcbSurfaceFinish(SharedCustomNodetreeNodeBase, ShaderNodeCustomGroup):
     bl_label = "Surface Finish BSDF"
@@ -589,8 +593,8 @@ class ShaderNodePcbShader(SharedCustomNodetreeNodeBase, ShaderNodeCustomGroup):
                 {0: ("cu", 0), 1: ("mask", 0)}),
             "silks_cut": ("ShaderNodeMath", {"operation": "SUBTRACT", "use_clamp": True},
                 {0: ("silks", 0), 1: ("cu_exposed", 0)}),
-            "edge_vc": ("ShaderNodeAttribute", {"attribute_name": "Board Edge"}, {}),
-            "hole_vc": ("ShaderNodeAttribute", {"attribute_name": "Through Holes"}, {}),
+            "edge_vc": ("ShaderNodeAttribute", {"attribute_name": LAYER_BOARD_EDGE}, {}),
+            "hole_vc": ("ShaderNodeAttribute", {"attribute_name": LAYER_THROUGH_HOLES}, {}),
             "combined_vc": ("ShaderNodeMath", {"operation": "ADD", "use_clamp": True},
                 {0: ("edge_vc", "Fac"), 1: ("hole_vc", "Fac")}),
             "silks_cut2": ("ShaderNodeMath", {"operation": "SUBTRACT", "use_clamp": True},
