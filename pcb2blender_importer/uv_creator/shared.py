@@ -14,6 +14,7 @@ SKIA_MAGIC = 0.282222222
 PCB = "pcb.wrl"
 COMPONENTS = "components"
 LAYERS = "layers"
+LAYERS_STACKUP = "stackup"
 LAYERS_BOUNDS = "bounds"
 BOARDS = "boards"
 BOUNDS = "bounds"

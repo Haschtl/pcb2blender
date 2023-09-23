@@ -9,14 +9,15 @@ import re
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 from dataclasses import dataclass, field
-from typing import List
-import json
+from enum import IntEnum
+from typing import List, Tuple
 
 PCB = "pcb.wrl"
 COMPONENTS = "components"
 LAYERS = "layers"
 BOARD_INFO = "board.yaml"
 LAYERS_BOUNDS = "bounds"
+LAYERS_STACKUP = "stackup"
 BOARDS = "boards"
 BOUNDS = "bounds"
 STACKED = "stacked_"
@@ -32,15 +33,54 @@ SVG_MARGIN = 1.0  # mm
 @dataclass
 class StackedBoard:
     name: str
-    offset: List[float]
+    offset: Tuple[float, float, float]
 
 
 @dataclass
 class BoardDef:
     name: str
-    bounds: List[float]
+    bounds: Tuple[float, float, float, float]
     stacked_boards: List[StackedBoard] = field(default_factory=list)
 
+class KiCadColor(IntEnum):
+    CUSTOM = 0
+    GREEN  = 1
+    RED    = 2
+    BLUE   = 3
+    PURPLE = 4
+    BLACK  = 5
+    WHITE  = 6
+    YELLOW = 7
+
+class SurfaceFinish(IntEnum):
+    HASL = 0
+    ENIG = 1
+    NONE = 2
+
+SURFACE_FINISH_MAP = {
+    "ENIG": SurfaceFinish.ENIG,
+    "ENEPIG": SurfaceFinish.ENIG,
+    "Hard gold": SurfaceFinish.ENIG,
+    "HT_OSP": SurfaceFinish.NONE,
+    "OSP": SurfaceFinish.NONE,
+}
+
+@dataclass
+class Stackup:
+    thickness_mm: float = 1.6
+    mask_color: KiCadColor = KiCadColor.GREEN
+    mask_color_custom: Tuple[int, int, int] = (0, 0, 0)
+    silks_color: KiCadColor = KiCadColor.WHITE
+    silks_color_custom: Tuple[int, int, int] = (0, 0, 0)
+    surface_finish: SurfaceFinish = SurfaceFinish.HASL
+
+    def pack(self) -> bytes:
+        return struct.pack("!fbBBBbBBBb",
+            self.thickness_mm,
+            self.mask_color, *self.mask_color_custom,
+            self.silks_color, *self.silks_color_custom,
+            self.surface_finish,
+        )
 
 def export_pcb3d(filepath, boarddefs):
     init_tempdir()
@@ -61,37 +101,32 @@ def export_pcb3d(filepath, boarddefs):
     )
     export_layers(board, bounds, layers_path)
 
-    board_info_path = get_temppath(BOARD_INFO)
-    export_board_info(board, board_info_path)
+    # board_info_path = get_temppath(BOARD_INFO)
+    # export_board_info(board, board_info_path)
 
-    board_id = os.path.split(board.GetFileName())[1].replace(".kicad_pcb", "")
+    # board_id = os.path.split(board.GetFileName())[1].replace(".kicad_pcb", "")
     with ZipFile(filepath, mode="w", compression=ZIP_DEFLATED) as file:
         # always ensure the COMPONENTS, LAYERS and BOARDS directories are created
-        file.writestr(COMPONENTS + "/", "")
-        file.writestr(LAYERS + "/", "")
-        file.writestr(BOARDS + "/", "")
+        file.writestr(f"{COMPONENTS}/", "")
+        file.writestr(f"{LAYERS}/", "")
+        file.writestr(f"{BOARDS}/", "")
 
         file.write(wrl_path, PCB)
         for path in components_path.glob("**/*.wrl"):
-            file.write(path, str(Path(COMPONENTS) / path.name))
+            file.write(path, f"{COMPONENTS}/{path.name}")
 
         for path in layers_path.glob("**/*.svg"):
-            file.write(path, str(Path(LAYERS) / path.name))
-        for path in layers_path.glob("**/*.gbr"):
-            file.write(path, str(Path(LAYERS) /
-                       path.name.replace(board_id+"-", "")))
-        file.writestr(str(Path(LAYERS) / LAYERS_BOUNDS),
-                      struct.pack("!ffff", *bounds))
-        file.write(board_info_path, BOARD_INFO)
-        for boarddef in boarddefs.values():
-            subdir = Path(BOARDS) / boarddef.name
+            file.write(path, f"{LAYERS}/{path.name}")
+        file.writestr(f"{LAYERS}/{LAYERS_BOUNDS}", struct.pack("!ffff", *bounds))
+        file.writestr(f"{LAYERS}/{LAYERS_STACKUP}", get_stackup(board).pack())
 
-            file.writestr(str(subdir / BOUNDS),
-                          struct.pack("!ffff", *boarddef.bounds))
+        for boarddef in boarddefs.values():
+            subdir = f"{BOARDS}/{boarddef.name}"
+            file.writestr(f"{subdir}/{BOUNDS}", struct.pack("!ffff", *boarddef.bounds))
 
             for stacked in boarddef.stacked_boards:
                 file.writestr(
-                    str(subdir / (STACKED + stacked.name)),
+                    f"{subdir}/{STACKED}{stacked.name}",
                     struct.pack("!fff", *stacked.offset)
                 )
 
@@ -120,7 +155,7 @@ def export_pcb3d(filepath, boarddefs):
                     pad.GetDrillShape(),
                     *map(ToMM, pad.GetDrillSize()),
                 )
-                file.writestr(str(Path(PADS) / name), data)
+                file.writestr(f"{PADS}/{name}", data)
 
 def get_boarddefs(board):
     boarddefs = {}
@@ -174,7 +209,7 @@ def get_boarddefs(board):
         other_name = sanitized(other)
         target_name = sanitized(target)
 
-        if not other_name in set(boarddefs) | {"FPNL"} or not target_name in boarddefs:
+        if other_name not in set(boarddefs) | {"FPNL"} or target_name not in boarddefs:
             continue
 
         stack_pos = stacks.pop(stack_str)
@@ -190,6 +225,36 @@ def get_boarddefs(board):
 
     return boarddefs, ignored
 
+def get_stackup(board):
+    stackup = Stackup()
+
+    tmp_path = get_temppath("pcb2blender_tmp.kicad_pcb")
+    board.Save(str(tmp_path))
+    content = tmp_path.read_text()
+
+    if not (match := stackup_regex.search(content)):
+        return stackup
+    stackup_content = match.group(0)
+
+    if matches := stackup_thickness_regex.finditer(stackup_content):
+        stackup.thickness_mm = sum(float(match.group(1)) for match in matches)
+
+    if match := stackup_mask_regex.search(stackup_content):
+        stackup.mask_color, stackup.mask_color_custom = parse_kicad_color(match.group(1))
+
+    if match := stackup_silks_regex.search(stackup_content):
+        stackup.silks_color, stackup.silks_color_custom = parse_kicad_color(match.group(1))
+
+    if match := stackup_copper_finish_regex.search(stackup_content):
+        stackup.surface_finish = SURFACE_FINISH_MAP.get(match.group(1), SurfaceFinish.HASL)
+
+    return stackup
+
+def parse_kicad_color(string):
+    if string[0] == "#":
+        return KiCadColor.CUSTOM, hex2rgb(string[1:7])
+    else:
+        return KiCadColor[string.upper()], (0, 0, 0)
 
 def export_layers(board, bounds, output_directory: Path):
     plot_controller = PLOT_CONTROLLER(board)
@@ -217,54 +282,53 @@ def export_layers(board, bounds, output_directory: Path):
         viewBox = " ".join(f"{value:.6f}" for value in bounds)
         content = svg_header_regex.sub(svg_header_sub.format(width, height, viewBox), content)
         filepath.write_text(content)
-    generate_gerbers(board, output_directory)
 
 
-def export_board_info(board, output_path):
-    # Stackup API is not ready yet, workaround: open kicad_pcb file and parse content
-    # stackup = board.GetDesignSettings().GetStackupDescriptor()
-    kicad_pcb_path = board.GetFileName()
-    with open(kicad_pcb_path, "r") as f:
-        kicad_pcb = f.readlines()
-    layers = []
-    start = False
-    for line in kicad_pcb:
-        if "(stackup" in line:
-            start = True
-            continue
-        if line == '    )\n':
-            break
+# def export_board_info(board, output_path):
+#     # Stackup API is not ready yet, workaround: open kicad_pcb file and parse content
+#     # stackup = board.GetDesignSettings().GetStackupDescriptor()
+#     kicad_pcb_path = board.GetFileName()
+#     with open(kicad_pcb_path, "r") as f:
+#         kicad_pcb = f.readlines()
+#     layers = []
+#     start = False
+#     for line in kicad_pcb:
+#         if "(stackup" in line:
+#             start = True
+#             continue
+#         if line == '    )\n':
+#             break
 
-        if start is True:
-            layers.append(line.strip())
-    board_info = {}
+#         if start is True:
+#             layers.append(line.strip())
+#     board_info = {}
 
-    layers_parsed = []
-    for l in layers:
-        if l.startswith("(layer"):
-            parsed_layer = {}
-            l_c = l.split("(")
-            for c in l_c:
-                if c.startswith("layer"):
-                    parsed_layer["name"] = c.split('"')[1]
-                if c.startswith("type"):
-                    parsed_layer["type"] = c.split('"')[1]
-                if c.startswith("color"):
-                    parsed_layer["color"] = c.split('"')[1]
-                if "thickness" in c:
-                    parsed_layer["thickness"] = float(
-                        c.replace("thickness", "").replace(")", ""))
-            layers_parsed.append(parsed_layer)
-        if l.startswith("(copper_finish "):
-            board_info["copper_finish"] = l.split('"')[1]
+#     layers_parsed = []
+#     for l in layers:
+#         if l.startswith("(layer"):
+#             parsed_layer = {}
+#             l_c = l.split("(")
+#             for c in l_c:
+#                 if c.startswith("layer"):
+#                     parsed_layer["name"] = c.split('"')[1]
+#                 if c.startswith("type"):
+#                     parsed_layer["type"] = c.split('"')[1]
+#                 if c.startswith("color"):
+#                     parsed_layer["color"] = c.split('"')[1]
+#                 if "thickness" in c:
+#                     parsed_layer["thickness"] = float(
+#                         c.replace("thickness", "").replace(")", ""))
+#             layers_parsed.append(parsed_layer)
+#         if l.startswith("(copper_finish "):
+#             board_info["copper_finish"] = l.split('"')[1]
 
-    board_info = {"stackup": layers_parsed}
-    with open(output_path, "w") as f:
-        json.dump(board_info, f, indent=3)
+#     board_info = {"stackup": layers_parsed}
+#     with open(output_path, "w") as f:
+#         json.dump(board_info, f, indent=3)
 
 
 def sanitized(name):
-    return re.sub("[\W]+", "_", name)
+    return re.sub(r"[\W]+", "_", name)
 
 
 def get_tempdir():
@@ -281,60 +345,20 @@ def init_tempdir():
         shutil.rmtree(tempdir)
     tempdir.mkdir()
 
+def hex2rgb(hex_string):
+    return (
+        int(hex_string[0:2], 16),
+        int(hex_string[2:4], 16),
+        int(hex_string[4:6], 16),
+    )
 
 svg_header_regex = re.compile(
     r"<svg([^>]*)width=\"[^\"]*\"[^>]*height=\"[^\"]*\"[^>]*viewBox=\"[^\"]*\"[^>]*>"
 )
-svg_header_sub = "<svg\g<1>width=\"{}\" height=\"{}\" viewBox=\"{}\">"
+svg_header_sub = "<svg\\g<1>width=\"{}\" height=\"{}\" viewBox=\"{}\">"
 
-
-def generate_gerbers(pcb, path):
-    plot_controller = pcbnew.PLOT_CONTROLLER(pcb)
-    plot_options = plot_controller.GetPlotOptions()
-
-    # Set General Options:
-    plot_options.SetOutputDirectory(path)
-    plot_options.SetPlotFrameRef(False)
-    plot_options.SetPlotValue(True)
-    plot_options.SetPlotReference(True)
-    plot_options.SetPlotInvisibleText(True)
-    plot_options.SetPlotViaOnMaskLayer(True)
-    plot_options.SetExcludeEdgeLayer(False)
-    # plot_options.SetPlotPadsOnSilkLayer(PLOT_PADS_ON_SILK_LAYER)
-    # plot_options.SetUseAuxOrigin(PLOT_USE_AUX_ORIGIN)
-    plot_options.SetMirror(False)
-    # plot_options.SetNegative(PLOT_NEGATIVE)
-    # plot_options.SetDrillMarksType(PLOT_DRILL_MARKS_TYPE)
-    # plot_options.SetScale(PLOT_SCALE)
-    plot_options.SetAutoScale(True)
-    # plot_options.SetPlotMode(PLOT_MODE)
-    # plot_options.SetLineWidth(pcbnew.FromMM(PLOT_LINE_WIDTH))
-
-    # Set Gerber Options
-    # plot_options.SetUseGerberAttributes(GERBER_USE_GERBER_ATTRIBUTES)
-    # plot_options.SetUseGerberProtelExtensions(GERBER_USE_GERBER_PROTEL_EXTENSIONS)
-    # plot_options.SetCreateGerberJobFile(GERBER_CREATE_GERBER_JOB_FILE)
-    # plot_options.SetSubtractMaskFromSilk(GERBER_SUBTRACT_MASK_FROM_SILK)
-    # plot_options.SetIncludeGerberNetlistInfo(GERBER_INCLUDE_GERBER_NETLIST_INFO)
-
-    plot_plan = [
-        ('F.Cu', pcbnew.F_Cu, 'Front Copper'),
-        ('B.Cu', pcbnew.B_Cu, 'Back Copper'),
-        ('F.Paste', pcbnew.F_Paste, 'Front Paste'),
-        ('B.Paste', pcbnew.B_Paste, 'Back Paste'),
-        ('F.SilkS', pcbnew.F_SilkS, 'Front SilkScreen'),
-        ('B.SilkS', pcbnew.B_SilkS, 'Back SilkScreen'),
-        ('F.Mask', pcbnew.F_Mask, 'Front Mask'),
-        ('B.Mask', pcbnew.B_Mask, 'Back Mask'),
-        ('Edge.Cuts', pcbnew.Edge_Cuts, 'Edges'),
-        ('Eco1.User', pcbnew.Eco1_User, 'Eco1 User'),
-        ('Eco2.User', pcbnew.Eco2_User, 'Eco1 User'),
-    ]
-
-    for layer_info in plot_plan:
-        plot_controller.SetLayer(layer_info[1])
-        plot_controller.OpenPlotfile(
-            layer_info[0], pcbnew.PLOT_FORMAT_GERBER, layer_info[2])
-        plot_controller.PlotLayer()
-
-    plot_controller.ClosePlot()
+stackup_regex = re.compile(r"\(stackup\s*((?:\s*\(.*\))*)\s*\)", re.MULTILINE)
+stackup_thickness_regex = re.compile(r"\(layer\s.*\(thickness\s+([^\)]*)\s*\)")
+stackup_mask_regex  = re.compile(r"\(layer\s+\"[FB].Mask\".*\(color\s+\"([^\)]*)\"\s*\)")
+stackup_silks_regex = re.compile(r"\(layer\s+\"[FB].SilkS\".*\(color\s+\"([^\)]*)\"\s*\)")
+stackup_copper_finish_regex = re.compile(r"\(copper_finish\s+\"([^\"]*)\"\s*\)")

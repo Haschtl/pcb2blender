@@ -3,11 +3,11 @@ from bpy.props import *
 
 import numpy as np
 
-from .importer import MM_TO_M, PCB_THICKNESS_MM
-from .custom_node_utils import setup_node_tree
+from .importer import MM_TO_M
+from .custom_node_utils import CustomNodetreeNodeBase
 
 class PCB2BLENDER_OT_solder_joint_add(bpy.types.Operator):
-    """Add aA solder joint"""
+    """Add a solder joint"""
     bl_idname = "pcb2blender.solder_joint_add"
     bl_label = "Solder Joint"
     bl_options = {"REGISTER", "UNDO"}
@@ -19,15 +19,19 @@ class PCB2BLENDER_OT_solder_joint_add(bpy.types.Operator):
         items=(("SQUARE", "Square", ""), ("RECTANGULAR", "Rectangular", "")),
         description="Shape of the pad")
     pad_size: FloatVectorProperty(name="Pad Size", subtype="XYZ", size=2, default=(1.7, 1.7),
-        description="Size of the pad")
+        description="Size of the pad in mm")
+    roundness: FloatProperty(name="Roundness", min=0.0, max=1.0,
+        description="Roundness of the corners of the pad")
+
     hole_shape: EnumProperty(name="Hole Shape",
         items=(("CIRCULAR", "Circular", ""), ("OVAL", "Oval", "")),
         description="Shape of the through hole")
     hole_size: FloatVectorProperty(name="Hole Size", subtype="XYZ", size=2, default=(1.0, 1.0),
-        description="Size of the through hole")
+        description="Size of the through hole in mm")
 
-    roundness: FloatProperty(name="Roundness", min=0.0, max=1.0,
-        description="Roundness of the corners of the pad")
+    pcb_thickness: FloatProperty(name="PCB Thickness",
+        unit="LENGTH", min=0.0, soft_max=3.0, default=1.6,
+        description="Thickness of the PCB in mm")
 
     location: FloatVectorProperty(name="Location", subtype="XYZ",
         description="Location for the newly added object")
@@ -50,9 +54,10 @@ class PCB2BLENDER_OT_solder_joint_add(bpy.types.Operator):
         hole_size = np.array(self.hole_size)
 
         if self.pad_type == "THT":
-            verts, faces = solder_joint_tht(pad_size, hole_size, self.roundness, PCB_THICKNESS_MM)
+            verts, faces = solder_joint_tht(
+                pad_size, hole_size, self.roundness, self.pcb_thickness)
         elif self.pad_type == "SMD":
-            verts, faces = solder_joint_smd(pad_size, self.roundness, PCB_THICKNESS_MM)
+            verts, faces = solder_joint_smd(pad_size, self.roundness, self.pcb_thickness)
 
         verts *= MM_TO_M
         indices = faces.flatten()
@@ -75,12 +80,12 @@ class PCB2BLENDER_OT_solder_joint_add(bpy.types.Operator):
             material = bpy.data.materials.new(name)
             material.use_nodes = True
             material.node_tree.nodes.clear()
-            nodes = {
+            nodes_def = {
                 "shader": ("ShaderNodeBsdfSolder", {}, {}),
                 "output": ("ShaderNodeOutputMaterial", {"location": (240, 0)},
                     {"Surface": ("shader", 0)}),
             }
-            setup_node_tree(material.node_tree, nodes)
+            CustomNodetreeNodeBase.setup_nodes(material.node_tree, nodes_def, False)
         mesh.materials.append(material)
 
         bpy.ops.object.select_all(action="DESELECT")
@@ -118,14 +123,20 @@ class PCB2BLENDER_OT_solder_joint_add(bpy.types.Operator):
 
         layout.prop(self, "pad_type")
         layout.separator()
+
         layout.prop(self, "pad_shape")
         layout.prop(self, "pad_size", index=0 if self.pad_shape == "SQUARE" else -1)
         layout.prop(self, "roundness", slider=True)
+        layout.separator()
+
         if self.pad_type == "THT":
-            layout.separator()
             layout.prop(self, "hole_shape")
             layout.prop(self, "hole_size", index=0 if self.hole_shape == "CIRCULAR" else -1)
+            layout.separator()
+
+        layout.prop(self, "pcb_thickness")
         layout.separator()
+
         layout.prop(self, "location")
         layout.prop(self, "rotation")
 
@@ -173,7 +184,7 @@ def add_octagon_layer(verts, faces, size, z, roundness=0.5, fill=False):
         (-(half_size[0] - r_offset), -(half_size[1]           ), z),
         (-(half_size[0]           ), -(half_size[1] - r_offset), z),
         (-(half_size[0]           ),  (half_size[1] - r_offset), z),
-        (-(half_size[0] - r_offset),  (half_size[1]           ), z),    
+        (-(half_size[0] - r_offset),  (half_size[1]           ), z),
     ))
 
     if len(verts) > 0:

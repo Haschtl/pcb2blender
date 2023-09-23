@@ -5,44 +5,52 @@ from git import Repo
 from zipfile import ZipFile, ZIP_DEFLATED
 from hashlib import sha256
 from itertools import chain
-import json, shutil, requests, re
+from autopep8 import main as autopep8
+from pytest import main as pytest
+from unittest.mock import patch
+import json, shutil, requests, re, sys
 
 RELEASE_DIRECTORY = Path("release")
 ARCHIVE_DIRECTORY = RELEASE_DIRECTORY / "archive"
 
-DESCRIPTION = re.sub(r"\n([^\n])", " \g<1>", """
-The pcb2blender workflow lets you create professionally looking product renders of all your
-KiCad projects in minutes! Simply export your board as a .pcb3d file in KiCad, import it into
-Blender and start creating!
+def generate_release():
+    info("running autopep8 ... ", end="")
+    autopep8(["", "--recursive", "--in-place", "."])
+    if Repo().is_dirty():
+        error("repo is dirty (stash changes before generating a release)")
 
-(Note for Linux/macOS users: If you run into any issues, make sure you're running python 3.10).
-""").strip()
+    with patch.object(sys, "argv", ["", "-q"]):
+        info("running pytest ...")
+        if (exit_code := pytest()) != 0:
+            error(f"tests failed with {exit_code}")
 
-METADATA_CONTACT = {
-    "name": "Bobbe",
-    "contact": {
-        "web": "https://30350n.de/",
-        "github": "https://github.com/30350n",
-        "discord": "Bobbe#8552"
-    },
-}
+    if Repo().head.is_detached:
+        error("repo is in detached head state")
+    if "up to date" not in Repo().git.status():
+        error("current commit is not pushed")
+    if Repo().tags[-1].commit != Repo().commit():
+        error("current commit is not tagged")
 
-ORIGIN = "https://github.com/30350n/pcb2blender"
+    info(f"generating release for {Repo().tags[-1]} ... ")
 
-METADATA = {
-    "$schema": "https://go.kicad.org/pcm/schemas/v1",
-    "name": "pcb2blender",
-    "description": "Export PCB 3D Models from Pcbnew to Blender",
-    "description_full": DESCRIPTION,
-    "identifier": "com.github.30350n.pcb2blender",
-    "type": "plugin",
-    "author": METADATA_CONTACT,
-    "maintainer": METADATA_CONTACT,
-    "license": "GPL-3.0",
-    "resources": {
-        "homepage": ORIGIN,
-    },
-}
+    ARCHIVE_DIRECTORY.mkdir(exist_ok=True)
+    for path in RELEASE_DIRECTORY.glob("*.zip*"):
+        if not path.is_file():
+            continue
+        shutil.move(path, ARCHIVE_DIRECTORY / path.name)
+
+    generate_kicad_addon(
+        Path(__file__).parent / "pcb2blender_exporter",
+        METADATA,
+        "images/icon.png",
+        ["images/blender_icon_32x32.png"],
+    )
+
+    generate_blender_addon(
+        Path(__file__).parent / "pcb2blender_importer",
+    )
+
+    success("done.")
 
 def generate_kicad_addon(path, metadata, icon_path=None, extra_files=[]):
     repo = Repo()
@@ -52,8 +60,8 @@ def generate_kicad_addon(path, metadata, icon_path=None, extra_files=[]):
     version, kicad_version, _ = latest_tag.name.split("-")
 
     if version[1:] != (package_version := get_package_version(path)):
-        print(f"warning: tag addon version '{version[1:]}' doesn't match package version "\
-            f"'{package_version}'")
+        warning(f"tag addon version '{version[1:]}' doesn't match package version "
+                f"'{package_version}'")
 
     RELEASE_DIRECTORY.mkdir(exist_ok=True)
     zip_path = RELEASE_DIRECTORY / f"{path.name}_{version[1:].replace('.', '-')}.zip"
@@ -105,7 +113,7 @@ def generate_kicad_addon(path, metadata, icon_path=None, extra_files=[]):
         if result.ok:
             metadata["versions"].append(result.json())
         else:
-            print(f"skipping {tag.name}, missing version.json")
+            hint(f"skipping {tag.name}, missing version.json")
 
     metadata_json = json.dumps(metadata, indent=4)
     (metadata_dir / "metadata.json").write_text(metadata_json)
@@ -118,16 +126,16 @@ def generate_blender_addon(path, extra_files=[]):
     version, _, blender_version = latest_tag.name.split("-")
 
     if version[1:] != (package_version := get_package_version(path)):
-        print(f"warning: tag addon version '{version[1:]}' doesn't match package version "\
-            f"'{package_version}'")
+        warning(f"tag addon version '{version[1:]}' doesn't match package version "
+                f"'{package_version}'")
 
     if version[1:] != (bl_info_version := get_bl_info_version(path)):
-        print(f"warning: tag addon version '{version[1:]}' doesn't match addon version "\
-            f"in bl_info '{bl_info_version}'")
+        warning(f"tag addon version '{version[1:]}' doesn't match addon version "
+                f"in bl_info '{bl_info_version}'")
 
     if blender_version[1:] != (bl_info_bversion := get_bl_info_bversion(path)):
-        print(f"warning: tag blender version '{version[1:]}' doesn't match blender version "\
-            f"in bl_info '{bl_info_bversion}'")
+        warning(f"tag blender version '{version[1:]}' doesn't match blender version "
+                f"in bl_info '{bl_info_bversion}'")
 
     RELEASE_DIRECTORY.mkdir(exist_ok=True)
     zip_path = RELEASE_DIRECTORY / f"{path.name}_{version[1:].replace('.', '-')}.zip"
@@ -161,37 +169,62 @@ version_regex  = re.compile(r"bl_info\s*=\s*{[^}]*\"version\"\s*:\s*\(([^^\)]*)\
 bversion_regex = re.compile(r"bl_info\s*=\s*{[^}]*\"blender\"\s*:\s*\(([^^\)]*)\)\s*,[^}]*}")
 package_version_regex  = re.compile(r"__version__\s*=\s*\"([^\"]*)\"")
 
+DESCRIPTION = re.sub(r"\n([^\n])", " \\g<1>", """
+The pcb2blender workflow lets you create professionally looking product renders of all your
+KiCad projects in minutes! Simply export your board as a .pcb3d file in KiCad, import it into
+Blender and start creating!
+
+(Note for Linux/macOS users: If you run into any issues, make sure you're running python 3.10).
+""").strip()
+
+METADATA_CONTACT = {
+    "name": "Bobbe",
+    "contact": {
+        "web": "https://30350n.de/",
+        "github": "https://github.com/30350n",
+        "discord": "Bobbe#8552"
+    },
+}
+
+ORIGIN = "https://github.com/30350n/pcb2blender"
+
+METADATA = {
+    "$schema": "https://go.kicad.org/pcm/schemas/v1",
+    "name": "pcb2blender",
+    "description": "Export PCB 3D Models from Pcbnew to Blender",
+    "description_full": DESCRIPTION,
+    "identifier": "com.github.30350n.pcb2blender",
+    "type": "plugin",
+    "author": METADATA_CONTACT,
+    "maintainer": METADATA_CONTACT,
+    "license": "GPL-3.0",
+    "resources": {
+        "homepage": ORIGIN,
+    },
+}
+
+COLOR_INFO = "\033[94m"
+COLOR_HINT = "\033[2;3m"
+COLOR_SUCCESS = "\033[92m"
+COLOR_WARNING = "\033[93m"
+COLOR_ERROR = "\033[91m"
+COLOR_END = "\033[0m"
+
+def info(msg, end="\n"):
+    print(f"{COLOR_INFO}{msg}{COLOR_END}", end=end, flush=True)
+
+def hint(msg):
+    print(f"{COLOR_HINT}({msg}){COLOR_END}")
+
+def success(msg):
+    print(f"{COLOR_SUCCESS}{msg}{COLOR_END}")
+
+def warning(msg):
+    print(f"{COLOR_WARNING}warning: {msg}{COLOR_END}")
+
+def error(msg):
+    print(f"\n{COLOR_ERROR}error: {msg}{COLOR_END}", file=sys.stderr)
+    exit()
+
 if __name__ == "__main__":
-    if Repo().head.is_detached:
-        print("error: repo is in detached head state")
-        exit()
-    if Repo().is_dirty():
-        print("error: repo is dirty (stash changes before generating a release)")
-        exit()
-    if not "up to date" in Repo().git.status():
-        print("error: current commit is not pushed")
-        exit()
-    if Repo().tags[-1].commit != Repo().commit():
-        print("error: current commit is not tagged")
-        exit()
-
-    print(f"generating release for {Repo().tags[-1]} ...")
-
-    ARCHIVE_DIRECTORY.mkdir(exist_ok=True)
-    for path in RELEASE_DIRECTORY.glob("*.zip*"):
-        if not path.is_file():
-            continue
-        shutil.move(path, ARCHIVE_DIRECTORY / path.name)
-
-    generate_kicad_addon(
-        Path(__file__).parent / "pcb2blender_exporter",
-        METADATA,
-        "images/icon.png",
-        ["images/blender_icon_32x32.png"],
-    )
-
-    generate_blender_addon(
-        Path(__file__).parent / "pcb2blender_importer",
-    )
-
-    print("... done.")
+    generate_release()

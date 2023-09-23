@@ -4,6 +4,8 @@
 
 <img src="images/header.jpg"/>
 
+# This fork is currently broken
+
 The pcb2blender workflow lets you create professionally looking product renders of all your
 KiCad projects in minutes! Simply export your board as a `.pcb3d` file in KiCad, import it into
 Blender and start creating!
@@ -21,10 +23,6 @@ them, after last minute board revisions.
 1. Hit the `Export to Blender (.pcb3d)` button in pcbnew.
 2. Import the file in Blender via `File -> Import -> PCB (.pcb3d)`
 3. Start creating awesome renders!
-
-### Features
-
-### Advanced Features
 
 ## Installation
 
